@@ -73,6 +73,11 @@
     let chatsQuery = "";
     let canLoadMore = false;
     let isLoadingMore = false;
+    let stickToBottom = true;
+    let scrollBtn = null;
+    let userScrolling = false;
+    let userScrollEndTimer;
+    let scrollTrimDebounce;
 
     let savedHeight =
         parseInt(localStorage.getItem("onlysq.composerH") || "0", 10) || 0;
@@ -106,6 +111,7 @@
 
     function setStreaming(b) {
         streaming = b;
+        logEl.classList.toggle("streaming", b);
         if (b) {
             sendBtn.style.display = "none";
             stopBtn.style.display = "";
@@ -995,6 +1001,7 @@
         const text = inp.value.trim();
         if (!text || streaming) return;
         addMsg("user", text);
+        forceScrollToBottom(true);
         inp.value = "";
         autoSize();
         showStatusPill("Thinking…");
@@ -1338,10 +1345,17 @@
         });
     }
 
-    let scrollTrimDebounce;
     logEl.addEventListener("scroll", () => {
-        const atBottom =
-            logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 8;
+        const atBottom = isAtBottom();
+
+        if (stickToBottom && !atBottom) {
+            stickToBottom = false;
+            updateScrollBtn();
+        } else if (!stickToBottom && atBottom) {
+            stickToBottom = true;
+            updateScrollBtn();
+        }
+
         if (atBottom) {
             clearTimeout(scrollTrimDebounce);
             scrollTrimDebounce = setTimeout(() => {
@@ -1428,11 +1442,12 @@
             case "prepend":
                 if (m.messages && m.messages.length) {
                     const prevHeight = logEl.scrollHeight;
+                    const prevTop = logEl.scrollTop;
                     for (let i = m.messages.length - 1; i >= 0; i--) {
                         addMsg(m.messages[i].role, m.messages[i].content, true);
                     }
                     const delta = logEl.scrollHeight - prevHeight;
-                    logEl.scrollTop += delta;
+                    logEl.scrollTop = prevTop + delta;
                 }
                 isLoadingMore = false;
                 loadMoreBtn.disabled = false;
@@ -1609,6 +1624,40 @@
                 input.select();
             }, 20);
         });
+    }
+
+    function isAtBottom() {
+        return logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 24;
+    }
+
+    function scrollToBottom(smooth) {
+        if (!stickToBottom) return;
+        if (smooth)
+            logEl.scrollTo({ top: logEl.scrollHeight, behavior: "smooth" });
+        else logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function forceScrollToBottom(smooth) {
+        stickToBottom = true;
+        updateScrollBtn();
+        if (smooth)
+            logEl.scrollTo({ top: logEl.scrollHeight, behavior: "smooth" });
+        else logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function ensureScrollBtn() {
+        if (scrollBtn) return scrollBtn;
+        scrollBtn = document.createElement("button");
+        scrollBtn.className = "scroll-bottom-btn";
+        scrollBtn.title = "Jump to latest";
+        scrollBtn.innerHTML = '<span class="arrow">↓</span>';
+        scrollBtn.addEventListener("click", () => forceScrollToBottom(true));
+        logEl.parentElement.appendChild(scrollBtn);
+        return scrollBtn;
+    }
+
+    function updateScrollBtn() {
+        ensureScrollBtn().classList.toggle("visible", !stickToBottom);
     }
 
     function showSettings(visible) {

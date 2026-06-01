@@ -7,3 +7,7 @@
 -   Apply/Reject diff preview for file edits.
 -   Token usage in status bar.
 -   Persistent chat history.
+
+## 0.1.6
+
+-   Added smooth scroll, etc.

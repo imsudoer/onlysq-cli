@@ -64,15 +64,20 @@ export async function previewLineEdit(
     }
 
     if (edit.expectedLines && edit.expectedLines.length) {
-        const actual = lines.slice(start, start + edit.expectedLines.length);
+        const stripPrefix = (s: string) => s.replace(/^\s*\d+\s*\|\s?/, "");
+        const expectedClean = edit.expectedLines.map(stripPrefix);
+        const actual = lines.slice(start, start + expectedClean.length);
         if (
-            actual.length !== edit.expectedLines.length ||
-            actual.some((l, i) => l !== edit.expectedLines![i])
+            actual.length !== expectedClean.length ||
+            actual.some((l, i) => l !== expectedClean[i])
         ) {
             throw new LineEditValidationError(
                 `expected_lines mismatch at ${edit.path}:${edit.startLine}. ` +
-                    `Re-read the file with read_file and retry.`,
-                { actual, expected: edit.expectedLines }
+                    `Actual lines at this position:\n` +
+                    actual
+                        .map((l, i) => `  ${edit.startLine + i} | ${l}`)
+                        .join("\n") +
+                    `\n\nRe-read the file with read_file (using start_line/end_line) and retry.`
             );
         }
     }

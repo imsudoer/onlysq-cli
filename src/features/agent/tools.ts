@@ -13,6 +13,7 @@ import {
     resolve,
     rel as toRel,
     getDiagnostics,
+    readTextWithLineNumbers,
 } from "../../services/workspace/fs";
 import {
     createProposal,
@@ -76,13 +77,41 @@ export const builtinTools: ToolHandler[] = [
             type: "function",
             function: {
                 name: "read_file",
-                description: "Read a UTF-8 file (truncated to 200KB).",
-                parameters: obj({ path: str("Workspace-relative path") }, [
-                    "path",
-                ]),
+                description:
+                    'Read a UTF-8 file with line numbers (1-based). Lines are formatted as "  42 | source code". ' +
+                    "For large files, use start_line / end_line to read a specific range. " +
+                    "Always prefer reading a focused range before editing.",
+                parameters: obj(
+                    {
+                        path: str("Workspace-relative path"),
+                        start_line: num("Optional 1-based start, default 1"),
+                        end_line: num(
+                            "Optional 1-based end (inclusive), default end of file"
+                        ),
+                    },
+                    ["path"]
+                ),
             },
         },
-        run: async ({ path }: { path: string }) => readText(path),
+        run: async ({
+            path,
+            start_line,
+            end_line,
+        }: {
+            path: string;
+            start_line?: number;
+            end_line?: number;
+        }) => {
+            const r = await readTextWithLineNumbers(path, {
+                start: start_line,
+                end: end_line,
+            });
+            let header = `File: ${path}\nTotal lines: ${r.totalLines}`;
+            if (r.truncated) header += " (file truncated at 200KB)";
+            if (start_line || end_line)
+                header += `\nShowing lines ${r.rangeStart}-${r.rangeEnd}`;
+            return header + "\n---\n" + r.text;
+        },
     },
 
     {
@@ -192,6 +221,65 @@ export const builtinTools: ToolHandler[] = [
                 null,
                 2
             );
+        },
+    },
+
+    {
+        def: {
+            type: "function",
+            function: {
+                name: "find_in_file",
+                description:
+                    "Find lines in a single file matching a regex, returning matched lines with line numbers and surrounding context. " +
+                    "Use this for large files where read_file would truncate or be too long. Returns up to 30 matches.",
+                parameters: obj(
+                    {
+                        path: str("Workspace-relative path"),
+                        pattern: str("JS regex"),
+                        context: num(
+                            "Lines of context around each match, default 2"
+                        ),
+                    },
+                    ["path", "pattern"]
+                ),
+            },
+        },
+        run: async ({
+            path,
+            pattern,
+            context,
+        }: {
+            path: string;
+            pattern: string;
+            context?: number;
+        }) => {
+            try {
+                const text = await readText(path, 2_000_000);
+                const lines = text.split("\n");
+                const re = new RegExp(pattern, "g");
+                const ctxN = Math.max(0, Math.min(10, context ?? 2));
+                const hits: string[] = [];
+                for (let i = 0; i < lines.length && hits.length < 30; i++) {
+                    re.lastIndex = 0;
+                    if (!re.test(lines[i])) continue;
+                    const start = Math.max(0, i - ctxN);
+                    const end = Math.min(lines.length - 1, i + ctxN);
+                    const width = String(end + 1).length;
+                    const block = [];
+                    for (let j = start; j <= end; j++) {
+                        const marker = j === i ? ">" : " ";
+                        const n = String(j + 1).padStart(width, " ");
+                        block.push(`${marker} ${n} | ${lines[j]}`);
+                    }
+                    hits.push(block.join("\n"));
+                }
+                return hits.length
+                    ? `File: ${path} (${lines.length} lines)\n\n` +
+                          hits.join("\n---\n")
+                    : "(no matches)";
+            } catch (e: any) {
+                return `Error: ${e?.message ?? e}`;
+            }
         },
     },
 

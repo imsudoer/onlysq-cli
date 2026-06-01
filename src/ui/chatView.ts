@@ -655,11 +655,33 @@ export class ChatView implements vscode.WebviewViewProvider {
         newText: string,
         mode: "chat" | "agent"
     ): Promise<void> {
-        if (!this.activeChat) return;
+        Logger.log(
+            `[chat] editMessageAt visIdx=${visibleIndex} text=${JSON.stringify(
+                newText
+            ).slice(0, 80)} mode=${mode}`
+        );
+
+        if (!this.activeChat) {
+            Logger.log("[chat] editMessageAt: no activeChat");
+            return;
+        }
         const realIdx = this.findRealIndexByVisible(visibleIndex);
-        if (realIdx < 0) return;
+        Logger.log(
+            `[chat] editMessageAt realIdx=${realIdx} historyLen=${this.history.length}`
+        );
+
+        if (realIdx < 0) {
+            Logger.log("[chat] editMessageAt: visible index not found");
+            this.view?.webview.postMessage({ type: "editCancelled" });
+            return;
+        }
         const msg = this.history[realIdx];
-        if (msg.role !== "user") return;
+        Logger.log(`[chat] editMessageAt found role=${msg.role}`);
+
+        if (msg.role !== "user") {
+            this.view?.webview.postMessage({ type: "editCancelled" });
+            return;
+        }
 
         this.aborter?.abort();
 
@@ -672,6 +694,7 @@ export class ChatView implements vscode.WebviewViewProvider {
         this.pushHistoryWindow("replace");
         this.pushChatList();
 
+        Logger.log("[chat] editMessageAt: starting handleSend");
         await this.handleSend(newText.trim(), mode);
     }
 

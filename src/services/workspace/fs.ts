@@ -37,7 +37,7 @@ export async function stat(rel: string): Promise<vscode.FileStat | null> {
 
 export async function readText(
     rel: string,
-    maxBytes = 200_000
+    maxBytes = 200_000_000
 ): Promise<string> {
     const data = await vscode.workspace.fs.readFile(resolve(rel));
     return new TextDecoder().decode(
@@ -192,4 +192,44 @@ export function getDiagnostics(filter?: string): DiagnosticEntry[] {
         }
     }
     return out;
+}
+
+export async function readTextWithLineNumbers(
+    rel: string,
+    opts: { start?: number; end?: number; maxBytes?: number } = {}
+): Promise<{
+    text: string;
+    totalLines: number;
+    truncated: boolean;
+    rangeStart: number;
+    rangeEnd: number;
+}> {
+    const data = await vscode.workspace.fs.readFile(resolve(rel));
+    const maxBytes = opts.maxBytes ?? 200_000;
+    const truncated = data.length > maxBytes;
+    const text = new TextDecoder().decode(
+        truncated ? data.slice(0, maxBytes) : data
+    );
+    const allLines = text.split("\n");
+    const totalLines = allLines.length;
+
+    const start = Math.max(1, opts.start ?? 1);
+    const end = Math.min(totalLines, opts.end ?? totalLines);
+    const slice = allLines.slice(start - 1, end);
+
+    const width = String(end).length;
+    const numbered = slice
+        .map((line, i) => {
+            const n = String(start + i).padStart(width, " ");
+            return `${n} | ${line}`;
+        })
+        .join("\n");
+
+    return {
+        text: numbered,
+        totalLines,
+        truncated,
+        rangeStart: start,
+        rangeEnd: end,
+    };
 }

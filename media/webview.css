@@ -1300,3 +1300,49 @@ button.icon-btn.on {
 .btn.danger:hover {
     background: rgba(248, 81, 73, 0.1);
 }
+
+.chat-log {
+    scroll-behavior: smooth;
+}
+
+.scroll-bottom-btn {
+    position: fixed;
+    right: 14px;
+    bottom: 90px;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--fg);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+    opacity: 0;
+    transform: translateY(6px) scale(0.92);
+    pointer-events: none;
+    transition: opacity 0.18s ease, transform 0.18s ease, border-color 0.15s,
+        color 0.15s;
+    z-index: 30;
+}
+.scroll-bottom-btn.visible {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    pointer-events: auto;
+}
+.scroll-bottom-btn:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+.scroll-bottom-btn .arrow {
+    line-height: 1;
+}
+.chat-log {
+    scroll-behavior: smooth;
+}
+.chat-log.streaming {
+    scroll-behavior: auto;
+}
