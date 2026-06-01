@@ -47,6 +47,14 @@
     const modelList = $("modelList");
     const loadMoreWrap = $("loadMoreWrap");
     const loadMoreBtn = $("loadMoreBtn");
+    const chatHeader = $("chatHeader");
+    const chatsBtn = $("chatsBtn");
+    const chatsPanel = $("chatsPanel");
+    const chatsList = $("chatsList");
+    const chatsSearch = $("chatsSearch");
+    const chatsNewBtn = $("chatsNewBtn");
+    const chatTitleEl = $("chatTitle");
+    const HISTORY_WINDOW = 30;
 
     let mode = "chat";
     let currentBody = null;
@@ -57,8 +65,8 @@
     let models = [];
     let toolBlocks = new Map(); // id -> element
     let statusPill = null;
-
-    const HISTORY_WINDOW = 30;
+    let chatsState = { list: [], activeId: null };
+    let chatsQuery = "";
     let canLoadMore = false;
     let isLoadingMore = false;
 
@@ -132,6 +140,7 @@
         show(authPanel, !signedIn);
         show(logEl, signedIn);
         show(composerWrap, signedIn);
+        show(chatHeader, signedIn);
         if (!signedIn) {
             authBtn.disabled = busy;
             authBtn.textContent = busy ? "Signing in…" : "Auth with OnlySq";
@@ -692,10 +701,9 @@
     agentBtn.addEventListener("click", () =>
         setMode(mode === "agent" ? "chat" : "agent")
     );
+
     newBtn.addEventListener("click", () => {
-        vscode.postMessage({ type: "reset" });
-        renderEmpty();
-        clearStatusPill();
+        vscode.postMessage({ type: "newChat" });
     });
     authBtn.addEventListener("click", (ev) => {
         ev.preventDefault();
@@ -720,6 +728,162 @@
             modalBackdrop.classList.remove("open");
         }
     });
+    chatsBtn.addEventListener("click", () => {
+        const open = chatsPanel.style.display !== "none";
+        show(chatsPanel, !open);
+        if (!open) {
+            chatsSearch.value = "";
+            chatsQuery = "";
+            renderChatsList();
+            setTimeout(() => chatsSearch.focus(), 20);
+        }
+    });
+    chatsNewBtn.addEventListener("click", () => {
+        vscode.postMessage({ type: "newChat" });
+        show(chatsPanel, false);
+    });
+    chatsSearch.addEventListener("input", () => {
+        chatsQuery = chatsSearch.value.toLowerCase().trim();
+        renderChatsList();
+    });
+    document.addEventListener("click", (e) => {
+        if (chatsPanel.style.display === "none") return;
+        if (!chatsPanel.contains(e.target) && e.target !== chatsBtn) {
+            show(chatsPanel, false);
+        }
+    });
+    document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && chatsPanel.style.display !== "none") {
+            show(chatsPanel, false);
+        }
+    });
+
+    chatTitleEl.addEventListener("click", () => beginRenameTitle());
+
+    function beginRenameTitle() {
+        if (!chatsState.activeId) return;
+        const cur = chatTitleEl.textContent || "";
+        chatTitleEl.contentEditable = "true";
+        chatTitleEl.classList.add("editing");
+        chatTitleEl.focus();
+        const range = document.createRange();
+        range.selectNodeContents(chatTitleEl);
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+
+        function finish(save) {
+            chatTitleEl.contentEditable = "false";
+            chatTitleEl.classList.remove("editing");
+            const next = (chatTitleEl.textContent || "").trim();
+            if (save && next && next !== cur) {
+                vscode.postMessage({
+                    type: "renameChat",
+                    id: chatsState.activeId,
+                    title: next,
+                });
+            } else {
+                chatTitleEl.textContent = cur;
+            }
+            chatTitleEl.removeEventListener("blur", onBlur);
+            chatTitleEl.removeEventListener("keydown", onKey);
+        }
+        function onBlur() {
+            finish(true);
+        }
+        function onKey(e) {
+            if (e.key === "Enter") {
+                e.preventDefault();
+                finish(true);
+            }
+            if (e.key === "Escape") {
+                e.preventDefault();
+                finish(false);
+            }
+        }
+        chatTitleEl.addEventListener("blur", onBlur);
+        chatTitleEl.addEventListener("keydown", onKey);
+    }
+
+    function renderChatsList() {
+        const q = chatsQuery;
+        const filtered = chatsState.list.filter(
+            (c) =>
+                !q ||
+                c.title.toLowerCase().includes(q) ||
+                c.preview.toLowerCase().includes(q)
+        );
+        chatsList.innerHTML = "";
+        if (!filtered.length) {
+            const e = el("div", "muted small", chatsList);
+            e.style.padding = "10px";
+            e.textContent = q
+                ? "No matching chats."
+                : "No chats yet. Send a message to start.";
+            return;
+        }
+        for (const c of filtered) {
+            const it = el(
+                "div",
+                "chat-item" + (c.id === chatsState.activeId ? " active" : ""),
+                chatsList
+            );
+            it.dataset.id = c.id;
+            const main = el("div", "chat-item-main", it);
+            const title = el("div", "chat-item-title", main);
+            title.textContent = c.title;
+            const meta = el("div", "chat-item-meta", main);
+            meta.textContent =
+                `${c.messageCount} msg · ${formatRelTime(c.updatedAt)}` +
+                (c.preview && c.preview !== "(empty)" ? ` · ${c.preview}` : "");
+
+            const actions = el("div", "chat-item-actions", it);
+            const renameB = el("button", "", actions);
+            renameB.title = "Rename";
+            renameB.textContent = "✎";
+            renameB.addEventListener("click", (ev) => {
+                ev.stopPropagation();
+                const next = prompt("Rename chat:", c.title);
+                if (next != null)
+                    vscode.postMessage({
+                        type: "renameChat",
+                        id: c.id,
+                        title: next,
+                    });
+            });
+            const delB = el("button", "danger", actions);
+            delB.title = "Delete";
+            delB.textContent = "🗑";
+            delB.addEventListener("click", (ev) => {
+                ev.stopPropagation();
+                if (confirm(`Delete chat "${c.title}"?`)) {
+                    vscode.postMessage({ type: "deleteChat", id: c.id });
+                }
+            });
+
+            it.addEventListener("click", () => {
+                vscode.postMessage({ type: "switchChat", id: c.id });
+                show(chatsPanel, false);
+            });
+        }
+    }
+
+    function formatRelTime(ts) {
+        const diff = Date.now() - ts;
+        const s = Math.floor(diff / 1000);
+        if (s < 60) return `${s}s ago`;
+        const m = Math.floor(s / 60);
+        if (m < 60) return `${m}m ago`;
+        const h = Math.floor(m / 60);
+        if (h < 24) return `${h}h ago`;
+        const d = Math.floor(h / 24);
+        if (d < 30) return `${d}d ago`;
+        return new Date(ts).toLocaleDateString();
+    }
+
+    function setActiveChatTitle(title) {
+        chatTitleEl.textContent = title || "New chat";
+    }
     function renderModels(query) {
         const q = String(query || "")
             .toLowerCase()
@@ -848,6 +1012,8 @@
             case "replace":
                 logBody.innerHTML = "";
                 toolBlocks.clear();
+                finalizeCurrent();
+                clearStatusPill();
                 if (m.messages && m.messages.length)
                     renderHistoryMessages(m.messages, false);
                 else renderEmpty();
@@ -883,6 +1049,21 @@
             case "canLoadMore":
                 canLoadMore = !!m.value;
                 updateLoadMoreVisibility();
+                break;
+            case "chats":
+                chatsState = {
+                    list: m.list || [],
+                    activeId: m.activeId || null,
+                };
+                if (chatsState.activeId) {
+                    const active = chatsState.list.find(
+                        (c) => c.id === chatsState.activeId
+                    );
+                    setActiveChatTitle(active?.title);
+                } else {
+                    setActiveChatTitle("New chat");
+                }
+                if (chatsPanel.style.display !== "none") renderChatsList();
                 break;
         }
     });

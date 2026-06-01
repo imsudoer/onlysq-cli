@@ -90,6 +90,11 @@
                 "command": "onlysq.showLog",
                 "title": "Show Log",
                 "category": "OnlySq"
+            },
+            {
+                "command": "onlysq.newChat",
+                "title": "New Chat",
+                "category": "OnlySq"
             }
         ],
         "viewsContainers": {
@@ -136,6 +141,12 @@
                 "command": "onlysq.openChat",
                 "key": "ctrl+alt+o",
                 "mac": "cmd+alt+o"
+            },
+            {
+                "command": "onlysq.newChat",
+                "key": "ctrl+alt+n",
+                "mac": "cmd+alt+n",
+                "when": "view.onlysq.chat.visible"
             }
         ],
         "configuration": {

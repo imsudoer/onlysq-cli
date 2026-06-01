@@ -110,14 +110,14 @@ export class SettingsView implements vscode.WebviewViewProvider {
             case "openSettings":
                 return void vscode.commands.executeCommand(
                     "workbench.action.openSettings",
-                    "@ext:onlysq.onlysq-cli"
+                    "@ext:subashev.onlysq-cli"
                 );
             case "openDashboard":
                 return void vscode.env.openExternal(
                     vscode.Uri.parse(SAUTH.dashboard)
                 );
             case "showLog":
-                return void vscode.commands.executeCommand("onlysq.showLog");
+                return void vscode.commands.executeCommand("subashev.showLog");
             case "refresh":
                 await this.auth.getApiKey(true).catch(() => {});
                 return;
