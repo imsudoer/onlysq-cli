@@ -2,7 +2,7 @@
     "name": "onlysq-cli",
     "displayName": "OnlySq CLI",
     "description": "AI coding assistant by OnlySq — inline completions, chat, and agent mode with native diff previews",
-    "version": "0.1.2",
+    "version": "0.1.3",
     "publisher": "subashev",
     "repository": {
         "type": "git",
@@ -113,12 +113,6 @@
                     "id": "onlysq.chat",
                     "name": "",
                     "contextualTitle": "OnlySq"
-                },
-                {
-                    "type": "webview",
-                    "id": "onlysq.settings",
-                    "name": "Settings",
-                    "contextualTitle": "OnlySq"
                 }
             ]
         },
@@ -192,9 +186,9 @@
                 },
                 "onlysq.agent.maxSteps": {
                     "type": "number",
-                    "default": 25,
+                    "default": 50,
                     "minimum": 1,
-                    "maximum": 100
+                    "maximum": 300
                 },
                 "onlysq.agent.parallelTools": {
                     "type": "boolean",

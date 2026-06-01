@@ -55,6 +55,10 @@
     const chatsNewBtn = $("chatsNewBtn");
     const chatTitleEl = $("chatTitle");
     const HISTORY_WINDOW = 30;
+    const settingsBtn = $("settingsBtn");
+    const settingsPanel = $("settingsPanel");
+    const settingsClose = $("settingsClose");
+    const settingsBody = $("settingsBody");
 
     let mode = "chat";
     let currentBody = null;
@@ -396,20 +400,399 @@
         if (empty) empty.remove();
         const m = document.createElement("div");
         m.className = "msg " + role;
-        const r = el("div", "role", m);
+
+        const head = el("div", "msg-head", m);
+        const r = el("span", "role", head);
         r.textContent = role === "user" ? "You" : "OnlySq";
+
+        const actions = el("span", "msg-actions", head);
+        if (role === "user") {
+            const editBtn = el("button", "msg-action", actions);
+            editBtn.textContent = "Edit";
+            editBtn.title = "Edit and resend";
+            editBtn.addEventListener("click", () => beginEdit(m));
+        } else {
+            const regenBtn = el("button", "msg-action", actions);
+            regenBtn.textContent = "Regenerate";
+            regenBtn.title = "Regenerate from this message";
+            regenBtn.addEventListener("click", () => requestRegenerate(m));
+        }
+        const copyBtn = el("button", "msg-action", actions);
+        copyBtn.textContent = "Copy";
+        copyBtn.title = "Copy text";
+        copyBtn.addEventListener("click", () => copyText(m));
+
         const body = el("div", "body", m);
         body.innerHTML = renderMarkdown(text);
+        m.dataset.raw = text;
+
         if (prepend) logBody.insertBefore(m, logBody.firstChild);
         else logBody.appendChild(m);
         if (!prepend) scrollToBottom();
         return body;
     }
 
+    function visibleIndexOf(msgEl) {
+        const all = Array.from(logBody.querySelectorAll(".msg"));
+        return all.indexOf(msgEl);
+    }
+
+    function copyText(msgEl) {
+        const raw =
+            msgEl.dataset.raw || msgEl.querySelector(".body")?.innerText || "";
+        try {
+            navigator.clipboard.writeText(raw);
+            flashAction(msgEl, "Copied");
+        } catch (e) {}
+    }
+
+    function flashAction(msgEl, text) {
+        const head = msgEl.querySelector(".msg-head");
+        if (!head) return;
+        const flash = el("span", "msg-flash", head);
+        flash.textContent = text;
+        setTimeout(() => flash.remove(), 1200);
+    }
+
+    function requestRegenerate(msgEl) {
+        if (streaming) return;
+        const idx = visibleIndexOf(msgEl);
+        if (idx < 0) return;
+        vscode.postMessage({ type: "regenerateAt", index: idx, mode });
+    }
+
+    function beginEdit(msgEl) {
+        if (streaming) return;
+        if (msgEl.classList.contains("editing")) return;
+        msgEl.classList.add("editing");
+        const body = msgEl.querySelector(".body");
+        const raw = msgEl.dataset.raw || body.innerText || "";
+        body.innerHTML = "";
+
+        const ta = document.createElement("textarea");
+        ta.className = "msg-editor";
+        ta.value = raw;
+        ta.rows = Math.min(10, Math.max(2, raw.split("\n").length));
+        body.appendChild(ta);
+
+        const ctl = el("div", "msg-editor-actions", body);
+        const save = el("button", "btn primary small", ctl);
+        save.textContent = "Save & resend";
+        const cancel = el("button", "btn ghost small", ctl);
+        cancel.textContent = "Cancel";
+
+        setTimeout(() => {
+            ta.focus();
+            ta.setSelectionRange(ta.value.length, ta.value.length);
+        }, 20);
+
+        function finish(commit) {
+            const next = ta.value;
+            msgEl.classList.remove("editing");
+            if (commit && next.trim()) {
+                const idx = visibleIndexOf(msgEl);
+                vscode.postMessage({
+                    type: "editMessage",
+                    index: idx,
+                    text: next,
+                    mode,
+                });
+            } else {
+                body.innerHTML = renderMarkdown(raw);
+            }
+        }
+        save.addEventListener("click", () => finish(true));
+        cancel.addEventListener("click", () => finish(false));
+        ta.addEventListener("keydown", (e) => {
+            if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
+                finish(true);
+            }
+            if (e.key === "Escape") {
+                e.preventDefault();
+                finish(false);
+            }
+        });
+    }
+
     function renderHistoryMessages(messages, prepend) {
         const empty = logBody.querySelector(".empty");
         if (empty && messages.length) empty.remove();
-        for (const m of messages) addMsg(m.role, m.content, prepend);
+        if (prepend) {
+            for (let i = messages.length - 1; i >= 0; i--) {
+                renderHistoryMessage(messages[i], true);
+            }
+        } else {
+            for (const m of messages) renderHistoryMessage(m, false);
+        }
+    }
+
+    settingsBtn.addEventListener("click", () => {
+        showSettings(true);
+        vscode.postMessage({ type: "getSettings" });
+        settingsPanel.classList.add("anim-in");
+        setTimeout(() => settingsPanel.classList.remove("anim-in"), 250);
+    });
+    settingsClose.addEventListener("click", () => showSettings(false));
+
+    function renderSettings(state) {
+        const { profile, values } = state;
+        settingsBody.innerHTML = "";
+
+        const account = el("section", "card", settingsBody);
+        account.innerHTML = '<div class="card-title">Account</div>';
+        const rows = el("div", "rows", account);
+        [
+            ["Name", profile.name],
+            ["Email", profile.email],
+            ["ID", profile.id],
+            ["Level", profile.level],
+            ["Balance", profile.balance != null ? "$" + profile.balance : null],
+        ].forEach(([k, v]) => {
+            const row = el("div", "row", rows);
+            row.innerHTML =
+                '<span class="k">' +
+                k +
+                "</span>" +
+                '<span class="v">' +
+                (v == null ? "—" : escapeHtml(String(v))) +
+                "</span>";
+        });
+        const actions = el("div", "actions", account);
+        const dashBtn = el("button", "btn ghost small", actions);
+        dashBtn.textContent = "Open dashboard";
+        dashBtn.addEventListener("click", () =>
+            vscode.postMessage({ type: "openDashboard" })
+        );
+        const signOutBtn = el("button", "btn ghost small", actions);
+        signOutBtn.textContent = "Sign out";
+        signOutBtn.addEventListener("click", () =>
+            vscode.postMessage({ type: "signOut" })
+        );
+
+        const ai = el("section", "card", settingsBody);
+        ai.innerHTML = '<div class="card-title">AI</div>';
+        settingRow(ai, "Chat model", "chatModel", values, "string-model");
+        settingRow(
+            ai,
+            "Completion model",
+            "completionModel",
+            values,
+            "string-model"
+        );
+        settingRow(
+            ai,
+            "Inline completions",
+            "inlineCompletions.enabled",
+            values,
+            "bool"
+        );
+        settingRow(ai, "Temperature", "temperature", values, "number", {
+            min: 0,
+            max: 2,
+            step: 0.1,
+        });
+
+        const agent = el("section", "card", settingsBody);
+        agent.innerHTML = '<div class="card-title">Agent</div>';
+        settingRow(agent, "Max steps", "agent.maxSteps", values, "number", {
+            min: 1,
+            max: 200,
+            step: 1,
+        });
+        settingRow(
+            agent,
+            "Parallel tools",
+            "agent.parallelTools",
+            values,
+            "bool"
+        );
+        settingRow(agent, "Cache reads", "agent.toolCache", values, "bool");
+        settingRow(
+            agent,
+            "Persist chat history",
+            "chat.persistHistory",
+            values,
+            "bool"
+        );
+
+        const approval = el("section", "card", settingsBody);
+        approval.innerHTML = '<div class="card-title">Approval policy</div>';
+        [
+            ["File writes", "approval.write"],
+            ["Deletions", "approval.delete"],
+            ["Renames", "approval.rename"],
+            ["Shell commands", "approval.shell"],
+            ["VS Code commands", "approval.vscodeCommand"],
+        ].forEach(([label, key]) =>
+            settingRow(approval, label, key, values, "enum-approval")
+        );
+
+        const diag = el("section", "card", settingsBody);
+        diag.innerHTML = '<div class="card-title">Diagnostics</div>';
+        const dactions = el("div", "actions", diag);
+        const logBtn = el("button", "btn ghost small", dactions);
+        logBtn.textContent = "Show log";
+        logBtn.addEventListener("click", () =>
+            vscode.postMessage({ type: "showLog" })
+        );
+    }
+
+    function settingRow(parent, label, key, values, kind, opts) {
+        const row = el("div", "setting-row", parent);
+        const lab = el("label", "setting-label", row);
+        lab.textContent = label;
+        const ctl = el("div", "setting-control", row);
+
+        const current = values[key];
+        if (kind === "bool") {
+            const sw = el("label", "switch", ctl);
+            const inp = document.createElement("input");
+            inp.type = "checkbox";
+            inp.checked = !!current;
+            sw.appendChild(inp);
+            const slider = el("span", "slider", sw);
+            inp.addEventListener("change", () => {
+                vscode.postMessage({
+                    type: "setSetting",
+                    key,
+                    value: inp.checked,
+                });
+            });
+        } else if (kind === "number") {
+            const inp = document.createElement("input");
+            inp.type = "number";
+            inp.className = "setting-input";
+            if (opts) {
+                if (opts.min != null) inp.min = String(opts.min);
+                if (opts.max != null) inp.max = String(opts.max);
+                if (opts.step != null) inp.step = String(opts.step);
+            }
+            inp.value = String(current ?? "");
+            ctl.appendChild(inp);
+            inp.addEventListener("change", () => {
+                vscode.postMessage({
+                    type: "setSetting",
+                    key,
+                    value: Number(inp.value),
+                });
+            });
+        } else if (kind === "enum-approval") {
+            const sel = document.createElement("select");
+            sel.className = "setting-input";
+            ["always", "ask", "never"].forEach((v) => {
+                const o = document.createElement("option");
+                o.value = v;
+                o.textContent = v;
+                if (v === current) o.selected = true;
+                sel.appendChild(o);
+            });
+            ctl.appendChild(sel);
+            sel.addEventListener("change", () => {
+                vscode.postMessage({
+                    type: "setSetting",
+                    key,
+                    value: sel.value,
+                });
+            });
+        } else if (kind === "string-model") {
+            const wrap = el("div", "model-pill", ctl);
+            wrap.style.minWidth = "120px";
+            const label = el("span", "", wrap);
+            label.textContent = current || "—";
+            const caret = el("span", "pcaret", wrap);
+            caret.textContent = "▾";
+            wrap.addEventListener("click", () => {
+                settingsModelTarget = key;
+                modalBackdrop.classList.add("open");
+                modelSearch.value = "";
+                renderModels("");
+                setTimeout(() => modelSearch.focus(), 20);
+            });
+        }
+    }
+
+    let settingsModelTarget = null;
+
+    function renderHistoryMessage(m, prepend) {
+        if (m.role === "user") {
+            addMsg("user", m.content, prepend);
+            return;
+        }
+        if (m.role === "assistant") {
+            if (prepend) {
+                const tools = m.tools || [];
+                for (let i = tools.length - 1; i >= 0; i--) {
+                    const t = tools[i];
+                    addHistoricalTool(t, true);
+                }
+                if (m.content) addMsg("assistant", m.content, true);
+            } else {
+                if (m.content) addMsg("assistant", m.content, false);
+                for (const t of m.tools || []) {
+                    addHistoricalTool(t, false);
+                }
+            }
+            return;
+        }
+    }
+
+    function addHistoricalTool(t, prepend) {
+        const isFile = FILE_TOOLS.has(t.name);
+        const block = document.createElement("div");
+        block.className = "tool-block" + (isFile ? " file" : "");
+        block.dataset.id = t.id;
+        const summary = summarizeArgs(t.name, t.args);
+
+        const head = el("div", "tool-head", block);
+        head.innerHTML =
+            '<span class="tcheck">✓</span>' +
+            '<span class="tname">' +
+            escapeHtml(t.name) +
+            "</span>" +
+            '<span class="tmeta' +
+            (isFile ? " tfile" : "") +
+            '">' +
+            escapeHtml(summary) +
+            "</span>" +
+            '<span class="tarrow">▶</span>';
+
+        const body = el("div", "tool-body", block);
+        if (
+            t.args &&
+            typeof t.args.reason === "string" &&
+            t.args.reason.trim()
+        ) {
+            const reasonBlock = el("div", "", body);
+            reasonBlock.innerHTML =
+                '<div class="tlabel">Description</div>' +
+                '<div class="treason"></div>';
+            reasonBlock.querySelector(".treason").textContent = t.args.reason;
+        }
+
+        const argsBlock = el("div", "", body);
+        argsBlock.innerHTML =
+            '<div class="tlabel">Arguments</div>' +
+            '<div class="targs">' +
+            highlightCode(JSON.stringify(t.args, null, 2)) +
+            "</div>";
+
+        if (typeof t.result === "string") {
+            const r = el("div", "", body);
+            r.innerHTML =
+                '<div class="tlabel">Result</div><div class="tresult"></div>';
+            r.querySelector(".tresult").textContent =
+                t.result.length > 4000
+                    ? t.result.slice(0, 4000) + "\n…(truncated)"
+                    : t.result;
+        }
+
+        head.addEventListener("click", () => block.classList.toggle("open"));
+
+        if (prepend) logBody.insertBefore(block, logBody.firstChild);
+        else logBody.appendChild(block);
+
+        toolBlocks.set(t.id, block);
     }
 
     function clearStatusPill() {
@@ -730,7 +1113,7 @@
     });
     chatsBtn.addEventListener("click", () => {
         const open = chatsPanel.style.display !== "none";
-        show(chatsPanel, !open);
+        showChatsPanel(!open);
         if (!open) {
             chatsSearch.value = "";
             chatsQuery = "";
@@ -740,7 +1123,7 @@
     });
     chatsNewBtn.addEventListener("click", () => {
         vscode.postMessage({ type: "newChat" });
-        show(chatsPanel, false);
+        showChatsPanel(false);
     });
     chatsSearch.addEventListener("input", () => {
         chatsQuery = chatsSearch.value.toLowerCase().trim();
@@ -749,12 +1132,12 @@
     document.addEventListener("click", (e) => {
         if (chatsPanel.style.display === "none") return;
         if (!chatsPanel.contains(e.target) && e.target !== chatsBtn) {
-            show(chatsPanel, false);
+            showChatsPanel(false);
         }
     });
     document.addEventListener("keydown", (e) => {
         if (e.key === "Escape" && chatsPanel.style.display !== "none") {
-            show(chatsPanel, false);
+            showChatsPanel(false);
         }
     });
 
@@ -841,29 +1224,34 @@
             const renameB = el("button", "", actions);
             renameB.title = "Rename";
             renameB.textContent = "✎";
-            renameB.addEventListener("click", (ev) => {
+            renameB.addEventListener("click", async (ev) => {
                 ev.stopPropagation();
-                const next = prompt("Rename chat:", c.title);
-                if (next != null)
+                const next = await showPrompt("Rename chat:", c.title);
+                if (next != null && next.trim()) {
                     vscode.postMessage({
                         type: "renameChat",
                         id: c.id,
-                        title: next,
+                        title: next.trim(),
                     });
-            });
-            const delB = el("button", "danger", actions);
-            delB.title = "Delete";
-            delB.textContent = "🗑";
-            delB.addEventListener("click", (ev) => {
-                ev.stopPropagation();
-                if (confirm(`Delete chat "${c.title}"?`)) {
-                    vscode.postMessage({ type: "deleteChat", id: c.id });
                 }
             });
 
+            const delB = el("button", "danger", actions);
+            delB.title = "Delete";
+            delB.textContent = "🗑";
+            delB.addEventListener("click", async (ev) => {
+                ev.stopPropagation();
+                const ok = await showConfirm(`Delete chat "${c.title}"?`, {
+                    destructive: true,
+                    okLabel: "Delete",
+                });
+                if (ok) {
+                    vscode.postMessage({ type: "deleteChat", id: c.id });
+                }
+            });
             it.addEventListener("click", () => {
                 vscode.postMessage({ type: "switchChat", id: c.id });
-                show(chatsPanel, false);
+                showChatsPanel(false);
             });
         }
     }
@@ -912,7 +1300,19 @@
                 sp.textContent = m.id;
                 it.appendChild(sp);
                 it.addEventListener("click", () => {
-                    vscode.postMessage({ type: "selectModel", model: m.id });
+                    if (settingsModelTarget) {
+                        vscode.postMessage({
+                            type: "setSetting",
+                            key: settingsModelTarget,
+                            value: m.id,
+                        });
+                        settingsModelTarget = null;
+                    } else {
+                        vscode.postMessage({
+                            type: "selectModel",
+                            model: m.id,
+                        });
+                    }
                     modalBackdrop.classList.remove("open");
                 });
             }
@@ -972,6 +1372,8 @@
                 if (!currentBody) startAssistantBody();
                 currentAcc += m.text;
                 currentBody.innerHTML = renderMarkdown(currentAcc);
+                const parentMsg = currentBody.closest(".msg");
+                if (parentMsg) parentMsg.dataset.raw = currentAcc;
                 currentBody.classList.add("cursor");
                 scrollToBottom();
                 break;
@@ -997,7 +1399,12 @@
                 finalizeCurrent();
                 clearStatusPill();
                 setStreaming(false);
-                if (m.reason) {
+                if (m.reason === "max_steps") {
+                    const e2 = el("div", "max-steps-notice", logBody);
+                    e2.innerHTML =
+                        "<strong>Agent reached max steps.</strong> " +
+                        'Type "continue" to keep going, or increase <code>onlysq.agent.maxSteps</code> in settings.';
+                } else if (m.reason) {
                     const e2 = el("div", "err small muted", logBody);
                     e2.textContent = "[" + m.reason + "]";
                 }
@@ -1065,9 +1472,157 @@
                 }
                 if (chatsPanel.style.display !== "none") renderChatsList();
                 break;
+
+            case "settings":
+                renderSettings(m);
+                break;
+            case "openSettings":
+                showSettings(true);
+                vscode.postMessage({ type: "getSettings" });
+                break;
         }
     });
 
+    function showConfirm(message, options) {
+        return new Promise((resolveP) => {
+            const opts = options || {};
+            const backdrop = document.createElement("div");
+            backdrop.className = "modal-backdrop open";
+            backdrop.style.zIndex = "200";
+
+            const modal = document.createElement("div");
+            modal.className = "confirm-modal";
+            backdrop.appendChild(modal);
+
+            const msg = document.createElement("div");
+            msg.className = "confirm-message";
+            msg.textContent = message;
+            modal.appendChild(msg);
+
+            const actions = document.createElement("div");
+            actions.className = "confirm-actions";
+            modal.appendChild(actions);
+
+            const cancelBtn = document.createElement("button");
+            cancelBtn.className = "btn ghost small";
+            cancelBtn.textContent = opts.cancelLabel || "Cancel";
+            actions.appendChild(cancelBtn);
+
+            const okBtn = document.createElement("button");
+            okBtn.className = opts.destructive
+                ? "btn danger small"
+                : "btn primary small";
+            okBtn.textContent = opts.okLabel || "OK";
+            actions.appendChild(okBtn);
+
+            function close(value) {
+                backdrop.remove();
+                document.removeEventListener("keydown", onKey);
+                resolveP(value);
+            }
+            function onKey(e) {
+                if (e.key === "Escape") {
+                    e.preventDefault();
+                    close(false);
+                }
+                if (e.key === "Enter") {
+                    e.preventDefault();
+                    close(true);
+                }
+            }
+
+            cancelBtn.addEventListener("click", () => close(false));
+            okBtn.addEventListener("click", () => close(true));
+            backdrop.addEventListener("click", (e) => {
+                if (e.target === backdrop) close(false);
+            });
+            document.addEventListener("keydown", onKey);
+
+            document.body.appendChild(backdrop);
+            setTimeout(() => okBtn.focus(), 20);
+        });
+    }
+
+    function showPrompt(message, defaultValue) {
+        return new Promise((resolveP) => {
+            const backdrop = document.createElement("div");
+            backdrop.className = "modal-backdrop open";
+            backdrop.style.zIndex = "200";
+
+            const modal = document.createElement("div");
+            modal.className = "confirm-modal";
+            backdrop.appendChild(modal);
+
+            const msg = document.createElement("div");
+            msg.className = "confirm-message";
+            msg.textContent = message;
+            modal.appendChild(msg);
+
+            const input = document.createElement("input");
+            input.type = "text";
+            input.className = "setting-input";
+            input.style.width = "100%";
+            input.style.marginTop = "8px";
+            input.value = defaultValue || "";
+            modal.appendChild(input);
+
+            const actions = document.createElement("div");
+            actions.className = "confirm-actions";
+            modal.appendChild(actions);
+
+            const cancelBtn = document.createElement("button");
+            cancelBtn.className = "btn ghost small";
+            cancelBtn.textContent = "Cancel";
+            actions.appendChild(cancelBtn);
+
+            const okBtn = document.createElement("button");
+            okBtn.className = "btn primary small";
+            okBtn.textContent = "OK";
+            actions.appendChild(okBtn);
+
+            function close(value) {
+                backdrop.remove();
+                document.removeEventListener("keydown", onKey);
+                resolveP(value);
+            }
+            function onKey(e) {
+                if (e.key === "Escape") {
+                    e.preventDefault();
+                    close(null);
+                }
+                if (e.key === "Enter") {
+                    e.preventDefault();
+                    close(input.value);
+                }
+            }
+
+            cancelBtn.addEventListener("click", () => close(null));
+            okBtn.addEventListener("click", () => close(input.value));
+            backdrop.addEventListener("click", (e) => {
+                if (e.target === backdrop) close(null);
+            });
+            document.addEventListener("keydown", onKey);
+
+            document.body.appendChild(backdrop);
+            setTimeout(() => {
+                input.focus();
+                input.select();
+            }, 20);
+        });
+    }
+
+    function showSettings(visible) {
+        settingsPanel.dataset.visible = visible ? "true" : "false";
+        settingsPanel.style.display = visible ? "flex" : "none";
+    }
+
+    function showChatsPanel(visible) {
+        chatsPanel.dataset.visible = visible ? "true" : "false";
+        chatsPanel.style.display = visible ? "flex" : "none";
+    }
+
+    showSettings(false);
+    showChatsPanel(false);
     setStreaming(false);
     log("ready, sending ready message");
     vscode.postMessage({ type: "ready" });

@@ -3,21 +3,17 @@ import { OpenAIClient } from "../services/llm/openaiClient";
 import { ChatMessage } from "../services/llm/types";
 import { ToolRegistry } from "../features/agent/toolRegistry";
 import { runAgent } from "../features/agent/loop";
-import { settings, updateSetting } from "../core/config";
 import { AuthService, AuthState } from "../services/auth/authService";
 import { ModelsService } from "../services/llm/modelsService";
 import { buildHtml, nonce } from "./webview/shared";
 import { Logger } from "../core/logger";
 import { ChatStore, ChatSession } from "../services/chat/chatStore";
 import { systemBriefForLLM } from "../core/systemInfo";
+import { sanitizeHistoryForApi } from "../services/llm/historyUtils";
+import { settings, updateSetting, SAUTH } from "../core/config";
 
 const HISTORY_WINDOW = 30;
 const HISTORY_PAGE = 30;
-
-const SYSTEM_CHAT = `You are OnlySq CLI, a coding assistant inside VS Code.
-- Answer in Markdown with fenced code blocks (\`\`\`lang).
-- "This file" / "selection" refers to the active editor context provided.
-- Be concise. Prefer code over prose when code is the answer.`;
 
 const CHAT_BODY = `
 <div id="authPanel" class="auth-wrap" style="display:none">
@@ -36,6 +32,7 @@ const CHAT_BODY = `
     <span id="chatTitle" class="chat-title" title="Click to rename">New chat</span>
   </div>
   <button class="icon-btn" id="newChat" title="New chat">+</button>
+  <button class="icon-btn" id="settingsBtn" title="Settings">⚙</button>
 </div>
 
 <div id="chatsPanel" class="chats-panel" style="display:none">
@@ -44,6 +41,14 @@ const CHAT_BODY = `
     <button class="btn ghost small" id="chatsNewBtn">+ New</button>
   </div>
   <div id="chatsList" class="chats-list"></div>
+</div>
+
+<div id="settingsPanel" class="settings-panel" style="display:none">
+  <div class="settings-head">
+    <span>Settings</span>
+    <button class="icon-btn" id="settingsClose" title="Close">×</button>
+  </div>
+  <div id="settingsBody" class="settings-body"></div>
 </div>
 
 <main id="logEl" class="chat-log" style="display:none">
@@ -127,6 +132,50 @@ export class ChatView implements vscode.WebviewViewProvider {
         return this.activeChat;
     }
 
+    private pushSettings(): void {
+        if (!this.view) return;
+        const c = vscode.workspace.getConfiguration("onlysq");
+        const profile = this.auth.profile ?? {};
+        this.view.webview.postMessage({
+            type: "settings",
+            profile: {
+                name: profile.name ?? null,
+                email: profile.email ?? null,
+                level: profile.level ?? null,
+                balance:
+                    profile.balance != null
+                        ? Number(profile.balance).toFixed(4)
+                        : null,
+                id: profile.id ?? null,
+            },
+            values: {
+                chatModel: c.get("chatModel", "gpt-4o-mini"),
+                completionModel: c.get("completionModel", "gpt-4o-mini"),
+                "inlineCompletions.enabled": c.get(
+                    "inlineCompletions.enabled",
+                    true
+                ),
+                temperature: c.get("temperature", 0.3),
+                "agent.maxSteps": c.get("agent.maxSteps", 50),
+                "agent.parallelTools": c.get("agent.parallelTools", true),
+                "agent.toolCache": c.get("agent.toolCache", true),
+                "chat.persistHistory": c.get("chat.persistHistory", true),
+                "approval.write": c.get("approval.write", "ask"),
+                "approval.delete": c.get("approval.delete", "ask"),
+                "approval.rename": c.get("approval.rename", "ask"),
+                "approval.shell": c.get("approval.shell", "ask"),
+                "approval.vscodeCommand": c.get(
+                    "approval.vscodeCommand",
+                    "ask"
+                ),
+            },
+        });
+    }
+
+    openSettingsPanel(): void {
+        this.view?.webview.postMessage({ type: "openSettings" });
+    }
+
     resolveWebviewView(view: vscode.WebviewView): void {
         Logger.log("[chat] resolveWebviewView");
         this.view = view;
@@ -163,6 +212,15 @@ export class ChatView implements vscode.WebviewViewProvider {
             })
         );
         this.subs.push(view.onDidDispose(() => this.disposeSubs()));
+        this.subs.push(
+            vscode.workspace.onDidChangeConfiguration((e) => {
+                if (e.affectsConfiguration("onlysq")) {
+                    this.pushSettings();
+                    if (e.affectsConfiguration("onlysq.chatModel"))
+                        this.pushModel();
+                }
+            })
+        );
     }
 
     focus(): void {
@@ -184,6 +242,7 @@ export class ChatView implements vscode.WebviewViewProvider {
 
     private async pushAuth(state?: AuthState): Promise<void> {
         if (!this.view) return;
+        this.pushSettings();
         const s = state ?? (await this.auth.getState());
         this.view.webview.postMessage({
             type: "auth",
@@ -220,11 +279,16 @@ export class ChatView implements vscode.WebviewViewProvider {
             case "ready":
                 await this.pushAuth();
                 this.pushChatList();
+                this.pushSettings();
                 if (this.history.length) this.pushHistoryWindow("replace");
                 return;
 
             case "signIn":
                 return this.auth.signIn();
+
+            case "signOut":
+                await this.auth.signOut();
+                return;
 
             case "send":
                 if (!(await this.auth.isSignedIn())) {
@@ -341,6 +405,49 @@ export class ChatView implements vscode.WebviewViewProvider {
                     });
                 }
                 return;
+
+            case "editMessage":
+                if (typeof m.index === "number" && typeof m.text === "string") {
+                    await this.editMessageAt(
+                        m.index,
+                        m.text,
+                        m.mode === "agent" ? "agent" : "chat"
+                    );
+                }
+                return;
+
+            case "regenerateAt":
+                if (typeof m.index === "number") {
+                    await this.regenerateAt(
+                        m.index,
+                        m.mode === "agent" ? "agent" : "chat"
+                    );
+                }
+                return;
+
+            case "getSettings":
+                this.pushSettings();
+                return;
+
+            case "setSetting":
+                if (typeof m.key === "string") {
+                    const target = vscode.ConfigurationTarget.Global;
+                    await vscode.workspace
+                        .getConfiguration("onlysq")
+                        .update(m.key, m.value, target);
+                    this.pushSettings();
+                }
+                return;
+
+            case "showLog":
+                Logger.show();
+                return;
+
+            case "openDashboard":
+                await vscode.env.openExternal(
+                    vscode.Uri.parse(SAUTH.dashboard)
+                );
+                return;
         }
     }
 
@@ -380,14 +487,16 @@ export class ChatView implements vscode.WebviewViewProvider {
             ? `${text}\n\n---\n**Editor context:**\n${ctx}`
             : text;
         const systemPrompt = `You are OnlySq CLI, a coding assistant inside VS Code.
-- Answer in Markdown with fenced code blocks (\`\`\`lang).
-- Be concise. Prefer code over prose when code is the answer.
+    - Answer in Markdown with fenced code blocks (\`\`\`lang).
+    - Be concise. Prefer code over prose when code is the answer.
+    
+    --- System context ---
+    ${systemBriefForLLM()}`;
 
---- System context ---
-${systemBriefForLLM()}`;
+        const cleanHistory = sanitizeHistoryForApi(this.history);
         const messages: ChatMessage[] = [
             { role: "system", content: systemPrompt },
-            ...this.history,
+            ...cleanHistory,
             { role: "user", content: userContent },
         ];
 
@@ -419,6 +528,7 @@ ${systemBriefForLLM()}`;
     ): Promise<void> {
         const ctx = await editorContextSnippet();
         const goal = ctx ? `${text}\n\n---\n**Editor context:**\n${ctx}` : text;
+        const cleanHistory = sanitizeHistoryForApi(this.history);
         const updated = await runAgent(
             this.client,
             this.registry,
@@ -453,7 +563,7 @@ ${systemBriefForLLM()}`;
                 }
             },
             signal,
-            this.history
+            cleanHistory
         );
         if (this.activeChat) this.activeChat.messages = updated;
         this.updateHistoryAfterTurn();
@@ -521,14 +631,134 @@ ${systemBriefForLLM()}`;
         this.pushChatList();
         this.pushHistoryWindow("replace");
     }
+
+    private getVisibleMessages(): ChatMessage[] {
+        return this.history.filter(
+            (m) => m.role === "user" || m.role === "assistant"
+        );
+    }
+
+    private findRealIndexByVisible(visibleIndex: number): number {
+        let count = -1;
+        for (let i = 0; i < this.history.length; i++) {
+            const r = this.history[i].role;
+            if (r === "user" || r === "assistant") {
+                count++;
+                if (count === visibleIndex) return i;
+            }
+        }
+        return -1;
+    }
+
+    private async editMessageAt(
+        visibleIndex: number,
+        newText: string,
+        mode: "chat" | "agent"
+    ): Promise<void> {
+        if (!this.activeChat) return;
+        const realIdx = this.findRealIndexByVisible(visibleIndex);
+        if (realIdx < 0) return;
+        const msg = this.history[realIdx];
+        if (msg.role !== "user") return;
+
+        this.aborter?.abort();
+
+        this.activeChat.messages = this.history.slice(0, realIdx);
+        this.windowStart = Math.max(
+            0,
+            this.activeChat.messages.length - HISTORY_WINDOW
+        );
+        await this.persistActive();
+        this.pushHistoryWindow("replace");
+        this.pushChatList();
+
+        await this.handleSend(newText.trim(), mode);
+    }
+
+    private async regenerateAt(
+        visibleIndex: number,
+        mode: "chat" | "agent"
+    ): Promise<void> {
+        if (!this.activeChat) return;
+        const realIdx = this.findRealIndexByVisible(visibleIndex);
+        if (realIdx < 0) return;
+
+        let userIdx = realIdx;
+        while (userIdx >= 0 && this.history[userIdx].role !== "user") userIdx--;
+        if (userIdx < 0) return;
+
+        const userMsg = this.history[userIdx];
+        const userText = String(userMsg.content ?? "");
+
+        this.aborter?.abort();
+
+        this.activeChat.messages = this.history.slice(0, userIdx);
+        this.windowStart = Math.max(
+            0,
+            this.activeChat.messages.length - HISTORY_WINDOW
+        );
+        await this.persistActive();
+        this.pushHistoryWindow("replace");
+        this.pushChatList();
+
+        await this.handleSend(userText, mode);
+    }
 }
 
-function serializeMessages(
-    msgs: ChatMessage[]
-): Array<{ role: string; content: string }> {
-    return msgs
-        .filter((m) => m.role === "user" || m.role === "assistant")
-        .map((m) => ({ role: m.role, content: m.content ?? "" }));
+function serializeMessages(msgs: ChatMessage[]): Array<{
+    role: string;
+    content: string;
+    tools?: Array<{
+        id: string;
+        name: string;
+        args: any;
+        result?: string;
+        editState?: string;
+    }>;
+}> {
+    const out: Array<any> = [];
+    let i = 0;
+    while (i < msgs.length) {
+        const m = msgs[i];
+        if (m.role === "user") {
+            out.push({ role: "user", content: m.content ?? "" });
+            i++;
+            continue;
+        }
+        if (m.role === "assistant") {
+            const tools: any[] = [];
+            if (m.tool_calls?.length) {
+                for (const tc of m.tool_calls) {
+                    let args: any = {};
+                    try {
+                        args = JSON.parse(tc.function?.arguments || "{}");
+                    } catch {
+                        /* */
+                    }
+                    const next = msgs[i + 1 + tools.length];
+                    const result =
+                        next?.role === "tool" && next.tool_call_id === tc.id
+                            ? next.content
+                            : undefined;
+                    tools.push({
+                        id: tc.id,
+                        name: tc.function?.name ?? "tool",
+                        args,
+                        result,
+                    });
+                }
+            }
+            out.push({
+                role: "assistant",
+                content: m.content ?? "",
+                tools: tools.length ? tools : undefined,
+            });
+            i += 1 + tools.length;
+            continue;
+        }
+        i++;
+    }
+    return out;
 }
 
 async function editorContextSnippet(): Promise<string | null> {

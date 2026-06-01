@@ -1,9 +1,10 @@
 import { OpenAIClient } from "../../services/llm/openaiClient";
-import { systemBriefForLLM } from "../../core/systemInfo";
 import { ChatMessage } from "../../services/llm/types";
 import { ToolRegistry } from "./toolRegistry";
 import { settings } from "../../core/config";
 import { ToolCache } from "./toolCache";
+import { systemBriefForLLM } from "../../core/systemInfo";
+import { Logger } from "../../core/logger";
 
 export type AgentEvent =
     | { type: "token"; text: string }
@@ -13,26 +14,26 @@ export type AgentEvent =
     | { type: "error"; message: string };
 
 const SYSTEM_BASE = `You are OnlySq CLI, an autonomous coding agent operating inside VS Code.
-    You have access to the user's workspace through tools. Workflow:
-    1. Understand the goal. Ask for clarification only if truly ambiguous.
-    2. Explore: use list_dir / search / read_file before assuming structure.
-    3. Plan briefly (1-3 sentences), then act.
-    4. Choose the right edit tool:
-       - propose_edit — create a new file, or fully rewrite an existing one. Provide the COMPLETE new content.
-       - apply_at_line — replace, insert before, or insert after a specific range of lines. You MUST provide expected_lines as a verification anchor.
-       - patch_file — apply a unified diff. Include accurate context lines.
-       ALL three open a native diff in the chat with Apply/Reject buttons.
-    5. CRITICAL: before apply_at_line or patch_file, ALWAYS call read_file to get the current file content. Never guess line numbers or context — the tool will reject your call if expected_lines / context lines do not match the real file, and you will have to read and retry.
-    6. After making one edit, the file content may have changed. If you need to make another edit to the same file, re-read it first.
-    7. You may request multiple read-only tools in one step — they run in parallel.
-    8. Stop and summarize when the goal is complete.
-    
-    Shell commands:
-    - run_command — captures stdout/stderr, use for one-off commands.
-    - run_command_interactive — fire-and-forget into terminal, use for dev servers / watchers.
-    - Respect the user's shell. Do NOT chain commands with operators the shell doesn't support.
-    
-    Be concise. Don't dump file contents back at the user unless asked.`;
+You have access to the user's workspace through tools. Workflow:
+1. Understand the goal. Ask for clarification only if truly ambiguous.
+2. Explore: use list_dir / search / read_file before assuming structure.
+3. Plan briefly (1-3 sentences), then act.
+4. Choose the right edit tool:
+   - propose_edit — create a new file, or fully rewrite an existing one.
+   - apply_at_line — replace, insert before, or insert after a specific range of lines. You MUST provide expected_lines as a verification anchor.
+   - patch_file — apply a unified diff. Include accurate context lines.
+   ALL three open a native diff in the chat with Apply/Reject buttons.
+5. CRITICAL: before apply_at_line or patch_file, ALWAYS call read_file to get the current file content.
+6. You may request multiple read-only tools in one step — they run in parallel.
+7. Stop and summarize when the goal is complete.
+8. Do not redact or replace technical identifiers like usernames, IP addresses, hostnames, or email-like strings. Preserve them verbatim.
+
+Shell commands:
+- run_command — captures stdout/stderr.
+- run_command_interactive — fire-and-forget into terminal.
+- Respect the user's shell.
+
+Be concise. Don't dump file contents back at the user unless asked.`;
 
 export async function runAgent(
     client: OpenAIClient,
@@ -52,17 +53,28 @@ export async function runAgent(
         ...history,
         { role: "user", content: goal },
     ];
-
     const tools = registry.list();
+
+    Logger.log(
+        `[agent] starting run, history=${history.length}, tools=${tools.length}, max_steps=${cfg.maxAgentSteps}`
+    );
 
     for (let step = 0; step < cfg.maxAgentSteps; step++) {
         if (signal?.aborted) {
+            Logger.log("[agent] aborted by signal");
             onEvent({ type: "done", reason: "cancelled" });
             return messages;
         }
 
+        Logger.log(
+            `[agent] step ${step + 1}/${cfg.maxAgentSteps}, sending ${
+                messages.length
+            } messages`
+        );
+
         let content = "";
         let toolCalls: any[] = [];
+        let finishReason: string | undefined;
 
         try {
             for await (const d of client.stream(
@@ -80,11 +92,19 @@ export async function runAgent(
                     onEvent({ type: "token", text: d.content });
                 }
                 if (d.toolCalls) toolCalls = d.toolCalls;
+                if (d.finishReason) finishReason = d.finishReason;
             }
         } catch (e: any) {
+            Logger.error("[agent] stream error", e);
             onEvent({ type: "error", message: String(e?.message ?? e) });
             return messages;
         }
+
+        Logger.log(
+            `[agent] step ${step + 1} got: content=${
+                content.length
+            }ch, tool_calls=${toolCalls.length}, finish=${finishReason}`
+        );
 
         messages.push({
             role: "assistant",
@@ -93,6 +113,15 @@ export async function runAgent(
         });
 
         if (!toolCalls.length) {
+            Logger.log(
+                `[agent] no tool calls, finishing. finish_reason=${finishReason}, content_length=${content.length}`
+            );
+            if (!content.trim() && finishReason !== "stop") {
+                Logger.log(
+                    "[agent] WARNING: empty response and finish_reason was",
+                    finishReason
+                );
+            }
             onEvent({ type: "done" });
             return messages;
         }
@@ -103,9 +132,17 @@ export async function runAgent(
             let args: any = {};
             try {
                 args = JSON.parse(tc.function.arguments || "{}");
-            } catch {
-                /* */
+            } catch (e) {
+                Logger.log(
+                    "[agent] tool args parse error",
+                    tc.function.arguments
+                );
             }
+            Logger.log(
+                `[agent] -> tool ${tc.function.name}(${JSON.stringify(
+                    args
+                ).slice(0, 200)})`
+            );
             onEvent({
                 type: "tool-call",
                 id: tc.id,
@@ -116,6 +153,9 @@ export async function runAgent(
             const cached = cache.get(tc.function.name, args);
             if (cached !== undefined) {
                 const cachedNote = "(cached) " + cached;
+                Logger.log(
+                    `[agent] <- cached ${tc.function.name} (${cachedNote.length}ch)`
+                );
                 onEvent({
                     type: "tool-result",
                     id: tc.id,
@@ -137,7 +177,13 @@ export async function runAgent(
                     : `Unknown tool: ${tc.function.name}`;
             } catch (e: any) {
                 result = `Error: ${e?.message ?? e}`;
+                Logger.error(`[agent] tool ${tc.function.name} threw`, e);
             }
+            Logger.log(
+                `[agent] <- ${tc.function.name} result (${
+                    result.length
+                }ch): ${result.slice(0, 200)}`
+            );
             cache.set(tc.function.name, args, result);
             onEvent({
                 type: "tool-result",
@@ -160,6 +206,8 @@ export async function runAgent(
             });
         }
     }
+
+    Logger.log("[agent] max_steps reached");
     onEvent({ type: "done", reason: "max_steps" });
     return messages;
 }

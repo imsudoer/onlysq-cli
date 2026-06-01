@@ -95,7 +95,15 @@ export function systemBriefForLLM(): string {
     ];
     if (s.isWindows) {
         lines.push(
-            "Note: shell is PowerShell — Unix-style chained operators like `||` and `&&` between commands do NOT work the same way. Prefer running ONE command at a time, or use cross-platform tools."
+            "Shell rules for Windows:",
+            "- Do not chain commands with `||` or `&&` — PowerShell parses them differently than Unix shells.",
+            "- Do not use `findstr` — it requires interactive console input. Prefer Select-String or the built-in `search` tool.",
+            "- Do not use Unix tools (grep, sed, awk, cat) unless you know they are installed. Prefer the `search`, `read_file`, `list_dir`, `find_files` tools.",
+            "- Avoid commands that open interactive prompts (pause, choice, more, pager)."
+        );
+    } else {
+        lines.push(
+            "- Avoid commands that open interactive prompts (less, more, pager)."
         );
     }
     return lines.join("\n");

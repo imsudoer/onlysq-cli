@@ -72,7 +72,7 @@ export function settings(): Settings {
         contextLinesBefore: c.get("inlineCompletions.linesBefore", 80),
         contextLinesAfter: c.get("inlineCompletions.linesAfter", 40),
         temperature: c.get("temperature", 0.3),
-        maxAgentSteps: c.get("agent.maxSteps", 25),
+        maxAgentSteps: c.get("agent.maxSteps", 50),
         approval: {
             write: ap("write", "ask"),
             delete: ap("delete", "ask"),

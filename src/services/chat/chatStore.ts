@@ -145,9 +145,7 @@ export class ChatStore {
     async updateMessages(id: string, messages: ChatMessage[]): Promise<void> {
         const c = this.get(id);
         if (!c) return;
-        c.messages = messages
-            .filter((m) => m.role === "user" || m.role === "assistant")
-            .slice(-MAX_MESSAGES_PER_CHAT);
+        c.messages = messages.slice(-MAX_MESSAGES_PER_CHAT);
         c.updatedAt = Date.now();
         if (c.title === "New chat" || !c.title) {
             const firstUser = c.messages.find((m) => m.role === "user");

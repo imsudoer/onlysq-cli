@@ -14,19 +14,25 @@ import {
     rel as toRel,
     getDiagnostics,
 } from "../../services/workspace/fs";
-import { createProposal, showDiff } from "../../services/workspace/diffPreview";
+import {
+    createProposal,
+    showDiff,
+    applyProposal,
+    rejectProposal,
+} from "../../services/workspace/diffPreview";
 import { runInTerminal } from "../../services/workspace/terminal";
+import {
+    executeShell,
+    formatShellResult,
+} from "../../services/workspace/shell";
 import { applyUnifiedDiff } from "../../services/workspace/patch";
 import { previewLineEdit, LineEdit } from "../../services/workspace/lineEdit";
 import { gotoLocation, getCursor } from "../../services/workspace/editorOps";
 import { gitStatus, gitDiff } from "../../services/workspace/git";
 import { listTasks, runTaskByName } from "../../services/workspace/tasks";
-import {
-    executeShell,
-    formatShellResult,
-} from "../../services/workspace/shell";
-import { systemInfo, osOpenCommand } from "../../core/systemInfo";
+import { systemInfo } from "../../core/systemInfo";
 import { askApproval } from "./approval";
+import { settings } from "../../core/config";
 
 const obj = (props: Record<string, any>, required: string[] = []) => ({
     type: "object",
@@ -40,6 +46,29 @@ const arr = (items: any, description: string) => ({
     items,
     description,
 });
+
+async function finalizeEditProposal(
+    proposalId: string,
+    path: string,
+    reason: string | undefined,
+    actionLabel: string
+): Promise<string> {
+    const mode = settings().approval.write;
+    if (mode === "always") {
+        await applyProposal(proposalId);
+        return `${actionLabel} applied to ${path} (auto-approved).${
+            reason ? `\nReason: ${reason}` : ""
+        }`;
+    }
+    if (mode === "never") {
+        rejectProposal(proposalId);
+        return `${actionLabel} to ${path} rejected by approval policy.`;
+    }
+    void showDiff(proposalId);
+    return `Proposed ${actionLabel.toLowerCase()} to ${path}. Awaiting user review.${
+        reason ? `\nReason: ${reason}` : ""
+    }`;
+}
 
 export const builtinTools: ToolHandler[] = [
     {
@@ -55,6 +84,7 @@ export const builtinTools: ToolHandler[] = [
         },
         run: async ({ path }: { path: string }) => readText(path),
     },
+
     {
         def: {
             type: "function",
@@ -73,6 +103,7 @@ export const builtinTools: ToolHandler[] = [
             );
         },
     },
+
     {
         def: {
             type: "function",
@@ -95,6 +126,7 @@ export const builtinTools: ToolHandler[] = [
                 )
             ).join("\n") || "(empty)",
     },
+
     {
         def: {
             type: "function",
@@ -116,6 +148,7 @@ export const builtinTools: ToolHandler[] = [
                 "\n"
             ) || "(no matches)",
     },
+
     {
         def: {
             type: "function",
@@ -123,7 +156,10 @@ export const builtinTools: ToolHandler[] = [
                 name: "find_files",
                 description: "Glob-based file search.",
                 parameters: obj(
-                    { glob: str('e.g. "**/*.ts"'), limit: num("Default 100") },
+                    {
+                        glob: str('e.g. "**/*.ts"'),
+                        limit: num("Default 100"),
+                    },
                     ["glob"]
                 ),
             },
@@ -132,6 +168,7 @@ export const builtinTools: ToolHandler[] = [
             (await findFiles(a.glob, a.limit ?? 100)).join("\n") ||
             "(no files)",
     },
+
     {
         def: {
             type: "function",
@@ -164,12 +201,15 @@ export const builtinTools: ToolHandler[] = [
             function: {
                 name: "propose_edit",
                 description:
-                    "Propose creating or fully overwriting a file. Opens diff with Apply/Reject in chat.",
+                    "Create a new file or fully overwrite an existing one with new content. " +
+                    "Depending on the user's approval policy, the change is either applied immediately, " +
+                    "rejected automatically, or presented in the chat with Apply/Reject buttons. " +
+                    "Provide the complete new file content (not a diff).",
                 parameters: obj(
                     {
-                        path: str(""),
+                        path: str("Workspace-relative path"),
                         content: str("Full new file content"),
-                        reason: str("Why (shown to user)"),
+                        reason: str("Short summary of the change"),
                     },
                     ["path", "content"]
                 ),
@@ -178,72 +218,38 @@ export const builtinTools: ToolHandler[] = [
         run: async (a: any, ctx) => {
             const proposal = await createProposal({
                 id: ctx.callId,
-                path: a.path,
+                path: String(a.path),
                 newContent: String(a.content ?? ""),
                 reason: a.reason ? String(a.reason) : undefined,
             });
-            void showDiff(proposal.id);
-            const head = `Proposed change to ${a.path}. Awaiting user review.`;
-            return a.reason ? `${head}\nReason: ${a.reason}` : head;
+            return finalizeEditProposal(
+                proposal.id,
+                String(a.path),
+                a.reason ? String(a.reason) : undefined,
+                "Edit"
+            );
         },
     },
-    {
-        def: {
-            type: "function",
-            function: {
-                name: "patch_file",
-                description:
-                    "Apply a unified diff (with @@ hunks) to an existing file. Use for medium-sized changes across multiple non-adjacent regions. The user reviews a native diff with Apply/Reject buttons. For brand-new files or rewrites use propose_edit instead.",
-                parameters: obj(
-                    {
-                        path: str("Workspace-relative path"),
-                        diff: str(
-                            'Unified diff text including @@ hunk headers. Lines start with " ", "+", or "-".'
-                        ),
-                        reason: str("Short summary shown to the user"),
-                    },
-                    ["path", "diff"]
-                ),
-            },
-        },
-        run: async (a: any, ctx) => {
-            try {
-                const preview = await applyUnifiedDiff(
-                    String(a.path),
-                    String(a.diff)
-                );
-                const proposal = await createProposal({
-                    id: ctx.callId,
-                    path: String(a.path),
-                    newContent: preview.proposed,
-                    reason: a.reason ? String(a.reason) : "Unified diff patch",
-                });
-                void showDiff(proposal.id);
-                return `Proposed patch to ${a.path}. Awaiting user review.`;
-            } catch (e: any) {
-                return `Error: ${e?.message ?? e}`;
-            }
-        },
-    },
+
     {
         def: {
             type: "function",
             function: {
                 name: "apply_at_line",
                 description:
-                    "Modify a specific range of lines in a file. Use this for small, targeted edits. The user reviews a native diff with Apply/Reject buttons. " +
-                    "CRITICAL: line numbers are 1-based and refer to the current file state. ALWAYS call read_file first to get correct line numbers. " +
-                    "You MUST provide expected_lines — the exact text currently on those lines — so the tool can verify you are not editing stale content. " +
-                    "If expected_lines do not match, you will get an error and must re-read the file.",
+                    "Modify a specific range of lines in a file. Use this for small, targeted edits. " +
+                    "CRITICAL: line numbers are 1-based and refer to the current file state. " +
+                    "ALWAYS call read_file first to get correct line numbers. " +
+                    "You MUST provide expected_lines — the exact text currently on those lines — for verification.",
                 parameters: obj(
                     {
                         path: str("Workspace-relative path"),
                         start_line: num("First line of the range, 1-based"),
                         end_line: num(
-                            "Last line, inclusive. Defaults to start_line. Ignored for insert_before/insert_after."
+                            "Last line, inclusive. Defaults to start_line. Ignored for insert modes."
                         ),
                         replacement: str(
-                            "Text to insert or replace with (can span multiple lines, no trailing newline)"
+                            "Text to insert or replace with (can span multiple lines)"
                         ),
                         mode: {
                             type: "string",
@@ -252,7 +258,7 @@ export const builtinTools: ToolHandler[] = [
                         },
                         expected_lines: arr(
                             str(""),
-                            "REQUIRED. The exact current content of lines [start_line .. end_line], one element per line, as a verification anchor."
+                            "REQUIRED. Exact current content of lines [start_line..end_line], one element per line."
                         ),
                         reason: str("Short summary shown to the user"),
                     },
@@ -293,8 +299,57 @@ export const builtinTools: ToolHandler[] = [
                               edit.endLine ? `-${edit.endLine}` : ""
                           }`,
                 });
-                void showDiff(proposal.id);
-                return `Proposed ${edit.mode} at ${edit.path}:${edit.startLine}. Awaiting user review.\n\nReplaced content:\n${preview.originalRange}`;
+                return finalizeEditProposal(
+                    proposal.id,
+                    edit.path,
+                    a.reason ? String(a.reason) : undefined,
+                    `${edit.mode} at line ${edit.startLine}`
+                );
+            } catch (e: any) {
+                return `Error: ${e?.message ?? e}`;
+            }
+        },
+    },
+
+    {
+        def: {
+            type: "function",
+            function: {
+                name: "patch_file",
+                description:
+                    "Apply a unified diff (with @@ hunks) to an existing file. " +
+                    "Use for medium-sized changes across multiple non-adjacent regions. " +
+                    "For brand-new files or full rewrites use propose_edit instead.",
+                parameters: obj(
+                    {
+                        path: str("Workspace-relative path"),
+                        diff: str(
+                            'Unified diff text including @@ hunk headers. Lines start with " ", "+", or "-".'
+                        ),
+                        reason: str("Short summary shown to the user"),
+                    },
+                    ["path", "diff"]
+                ),
+            },
+        },
+        run: async (a: any, ctx) => {
+            try {
+                const preview = await applyUnifiedDiff(
+                    String(a.path),
+                    String(a.diff)
+                );
+                const proposal = await createProposal({
+                    id: ctx.callId,
+                    path: String(a.path),
+                    newContent: preview.proposed,
+                    reason: a.reason ? String(a.reason) : "Unified diff patch",
+                });
+                return finalizeEditProposal(
+                    proposal.id,
+                    String(a.path),
+                    a.reason ? String(a.reason) : undefined,
+                    "Patch"
+                );
             } catch (e: any) {
                 return `Error: ${e?.message ?? e}`;
             }
@@ -306,8 +361,10 @@ export const builtinTools: ToolHandler[] = [
             type: "function",
             function: {
                 name: "delete_file",
-                description: "Move file/folder to trash.",
-                parameters: obj({ path: str("") }, ["path"]),
+                description: "Move a file or folder to the trash.",
+                parameters: obj({ path: str("Workspace-relative path") }, [
+                    "path",
+                ]),
             },
         },
         run: async ({ path }: { path: string }) => {
@@ -316,19 +373,27 @@ export const builtinTools: ToolHandler[] = [
                     "delete",
                     `OnlySq agent wants to delete ${path}. Allow?`
                 ))
-            )
+            ) {
                 return "User denied delete";
+            }
             await deleteFile(path);
             return `Deleted ${path}`;
         },
     },
+
     {
         def: {
             type: "function",
             function: {
                 name: "rename_file",
-                description: "Rename / move file.",
-                parameters: obj({ from: str(""), to: str("") }, ["from", "to"]),
+                description: "Rename or move a file.",
+                parameters: obj(
+                    {
+                        from: str("Source path"),
+                        to: str("Destination path"),
+                    },
+                    ["from", "to"]
+                ),
             },
         },
         run: async ({ from, to }: { from: string; to: string }) => {
@@ -337,8 +402,9 @@ export const builtinTools: ToolHandler[] = [
                     "rename",
                     `OnlySq agent wants to rename ${from} -> ${to}. Allow?`
                 ))
-            )
+            ) {
                 return "User denied rename";
+            }
             if (await exists(to)) return `Target already exists: ${to}`;
             await renameFile(from, to);
             return `Renamed ${from} -> ${to}`;
@@ -353,7 +419,10 @@ export const builtinTools: ToolHandler[] = [
                 description:
                     "Open a file in the editor; optionally reveal a line.",
                 parameters: obj(
-                    { path: str(""), line: num("Optional 1-based") },
+                    {
+                        path: str("Workspace-relative path"),
+                        line: num("Optional 1-based line to reveal"),
+                    },
                     ["path"]
                 ),
             },
@@ -363,6 +432,7 @@ export const builtinTools: ToolHandler[] = [
             return `Opened ${path}${line ? `:${line}` : ""}`;
         },
     },
+
     {
         def: {
             type: "function",
@@ -372,7 +442,7 @@ export const builtinTools: ToolHandler[] = [
                     "Place the cursor at a specific position or select a range.",
                 parameters: obj(
                     {
-                        path: str(""),
+                        path: str("Workspace-relative path"),
                         line: num("1-based"),
                         column: num("1-based, default 1"),
                         end_line: num("Optional for selection"),
@@ -390,7 +460,12 @@ export const builtinTools: ToolHandler[] = [
                           endColumn: a.end_column ?? 1,
                       }
                     : undefined;
-            await gotoLocation(a.path, Number(a.line), a.column ?? 1, sel);
+            await gotoLocation(
+                String(a.path),
+                Number(a.line),
+                a.column ?? 1,
+                sel
+            );
             return sel
                 ? `Selected ${a.path}:${a.line}:${a.column ?? 1} → ${
                       a.end_line
@@ -398,6 +473,7 @@ export const builtinTools: ToolHandler[] = [
                 : `Cursor at ${a.path}:${a.line}:${a.column ?? 1}`;
         },
     },
+
     {
         def: {
             type: "function",
@@ -412,6 +488,7 @@ export const builtinTools: ToolHandler[] = [
             return c ? JSON.stringify(c, null, 2) : "(no active editor)";
         },
     },
+
     {
         def: {
             type: "function",
@@ -449,6 +526,7 @@ export const builtinTools: ToolHandler[] = [
             );
         },
     },
+
     {
         def: {
             type: "function",
@@ -469,13 +547,16 @@ export const builtinTools: ToolHandler[] = [
             return out.length ? out.join("\n") : "(no open editors)";
         },
     },
+
     {
         def: {
             type: "function",
             function: {
                 name: "get_diagnostics",
-                description: "Errors / warnings from language servers.",
-                parameters: obj({ path_filter: str("") }),
+                description: "Errors and warnings from language servers.",
+                parameters: obj({
+                    path_filter: str("Optional substring filter"),
+                }),
             },
         },
         run: async ({ path_filter }: { path_filter?: string }) => {
@@ -499,13 +580,14 @@ export const builtinTools: ToolHandler[] = [
             function: {
                 name: "run_command",
                 description:
-                    "Run a shell command and capture its full stdout/stderr. Best for builds, tests, scripts. Times out after 30s. Use the user's native shell — chain operators differ per OS (see system context).",
+                    "Run a shell command and capture its full stdout/stderr. " +
+                    "Best for builds, tests, scripts. Times out after 30s by default (max 120s).",
                 parameters: obj(
                     {
                         command: str("Shell command to execute"),
                         cwd: str("Optional relative working directory"),
                         timeout_ms: num(
-                            "Optional timeout, default 30000, max 120000"
+                            "Optional timeout in ms, default 30000, max 120000"
                         ),
                     },
                     ["command"]
@@ -526,16 +608,19 @@ export const builtinTools: ToolHandler[] = [
             return formatShellResult(r);
         },
     },
+
     {
         def: {
             type: "function",
             function: {
                 name: "run_command_interactive",
                 description:
-                    "Run a long-running command in the OnlySq Agent terminal (e.g. dev server). User sees output live; this tool returns immediately without capturing output. Use for `npm run dev`, watchers, etc.",
+                    "Run a long-running command in the OnlySq Agent terminal. " +
+                    "User sees output live; this tool returns immediately without capturing output. " +
+                    "Use for dev servers, watchers, REPLs.",
                 parameters: obj(
                     {
-                        command: str(""),
+                        command: str("Shell command"),
                         cwd: str("Optional relative cwd"),
                     },
                     ["command"]
@@ -547,14 +632,12 @@ export const builtinTools: ToolHandler[] = [
                 !(await askApproval("shell", `Start in terminal: ${a.command}`))
             )
                 return "User denied command";
-            const { runInTerminal } = await import(
-                "../../services/workspace/terminal"
-            );
             const full = a.cwd ? `cd "${a.cwd}" && ${a.command}` : a.command;
-            runInTerminal(full, true);
+            runInTerminal(String(full), true);
             return `Started in terminal: ${a.command}`;
         },
     },
+
     {
         def: {
             type: "function",
@@ -581,21 +664,7 @@ export const builtinTools: ToolHandler[] = [
             return `Opened: ${target}`;
         },
     },
-    {
-        def: {
-            type: "function",
-            function: {
-                name: "system_info",
-                description:
-                    "Get host OS, shell, VS Code and workspace context.",
-                parameters: obj({}),
-            },
-        },
-        run: async () => {
-            const s = systemInfo();
-            return JSON.stringify(s, null, 2);
-        },
-    },
+
     {
         def: {
             type: "function",
@@ -612,6 +681,7 @@ export const builtinTools: ToolHandler[] = [
                 : "(no tasks)";
         },
     },
+
     {
         def: {
             type: "function",
@@ -639,6 +709,7 @@ export const builtinTools: ToolHandler[] = [
         },
         run: async () => gitStatus(),
     },
+
     {
         def: {
             type: "function",
@@ -678,14 +749,32 @@ export const builtinTools: ToolHandler[] = [
             );
         },
     },
+
+    {
+        def: {
+            type: "function",
+            function: {
+                name: "system_info",
+                description:
+                    "Get host OS, shell, VS Code and workspace context.",
+                parameters: obj({}),
+            },
+        },
+        run: async () => JSON.stringify(systemInfo(), null, 2),
+    },
+
     {
         def: {
             type: "function",
             function: {
                 name: "run_vscode_command",
-                description: "Run any VS Code command by id.",
+                description:
+                    'Run any VS Code command by id (e.g. "editor.action.formatDocument").',
                 parameters: obj(
-                    { command: str(""), args: arr({}, "Optional args") },
+                    {
+                        command: str("VS Code command id"),
+                        args: arr({}, "Optional args"),
+                    },
                     ["command"]
                 ),
             },

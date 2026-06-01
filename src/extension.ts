@@ -11,7 +11,6 @@ import { ToolRegistry } from "./features/agent/toolRegistry";
 import { builtinTools } from "./features/agent/tools";
 import { OnlySqInlineProvider } from "./features/completion/provider";
 import { ChatView } from "./ui/chatView";
-import { SettingsView } from "./ui/settingsView";
 import { StatusBar } from "./ui/statusBar";
 import { registerDiffProvider } from "./services/workspace/diffPreview";
 import { disposeTerminal } from "./services/workspace/terminal";
@@ -34,7 +33,6 @@ export async function activate(ctx: vscode.ExtensionContext) {
     const usage = new UsageTracker(ctx);
     const client = new OpenAIClient(auth, usage);
     const chat = new ChatView(ctx, client, registry, auth, modelsService);
-    const settingsView = new SettingsView(ctx, auth);
 
     const status = new StatusBar(auth, usage);
 
@@ -45,15 +43,6 @@ export async function activate(ctx: vscode.ExtensionContext) {
         vscode.window.registerWebviewViewProvider(ChatView.viewId, chat, {
             webviewOptions: { retainContextWhenHidden: true },
         })
-    );
-    subs.add(
-        vscode.window.registerWebviewViewProvider(
-            SettingsView.viewId,
-            settingsView,
-            {
-                webviewOptions: { retainContextWhenHidden: true },
-            }
-        )
     );
 
     let inlineDisposable: vscode.Disposable | undefined;
@@ -87,9 +76,6 @@ export async function activate(ctx: vscode.ExtensionContext) {
     cmd("onlysq.signIn", () => auth.signIn());
     cmd("onlysq.signOut", () => auth.signOut());
     cmd("onlysq.openChat", () => chat.focus());
-    cmd("onlysq.openSettings", () =>
-        vscode.commands.executeCommand(`${SettingsView.viewId}.focus`)
-    );
     cmd("onlysq.showLog", () => Logger.show());
 
     cmd("onlysq.explainSelection", async () => {
@@ -112,6 +98,11 @@ export async function activate(ctx: vscode.ExtensionContext) {
             "Refactor the selected code. Use propose_edit to apply changes.",
             "agent"
         );
+    });
+
+    cmd("onlysq.openSettings", () => {
+        chat.focus();
+        chat.openSettingsPanel();
     });
 
     cmd("onlysq.runAgent", async () => {

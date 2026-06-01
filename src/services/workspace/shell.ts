@@ -107,17 +107,19 @@ function wrapForShell(
     shell: string
 ): { exe: string; args: string[] } {
     switch (shell) {
-        case "powershell":
+        case "powershell": {
+            const encoded = Buffer.from(command, "utf16le").toString("base64");
             return {
                 exe: "powershell.exe",
                 args: [
                     "-NoLogo",
                     "-NoProfile",
                     "-NonInteractive",
-                    "-Command",
-                    command,
+                    "-EncodedCommand",
+                    encoded,
                 ],
             };
+        }
         case "cmd":
             return { exe: "cmd.exe", args: ["/d", "/s", "/c", command] };
         default:
