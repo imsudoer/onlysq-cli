@@ -174,6 +174,10 @@ export async function activate(ctx: vscode.ExtensionContext) {
     });
 
     cmd("onlysq.resetUsage", () => usage.reset());
+    cmd("onlysq.newChat", async () => {
+        chat.focus();
+        await chat.newChat();
+    });
 
     if (await auth.isSignedIn()) {
         void modelsService.fetch().catch(() => {});

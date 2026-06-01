@@ -8,7 +8,7 @@ import { AuthService, AuthState } from "../services/auth/authService";
 import { ModelsService } from "../services/llm/modelsService";
 import { buildHtml, nonce } from "./webview/shared";
 import { Logger } from "../core/logger";
-import { HistoryStore } from "../services/chat/historyStore";
+import { ChatStore, ChatSession } from "../services/chat/chatStore";
 import { systemBriefForLLM } from "../core/systemInfo";
 
 const HISTORY_WINDOW = 30;
@@ -30,6 +30,22 @@ const CHAT_BODY = `
   </div>
 </div>
 
+<div id="chatHeader" class="chat-header" style="display:none">
+  <button class="icon-btn" id="chatsBtn" title="Chats">≡</button>
+  <div class="chat-title-wrap">
+    <span id="chatTitle" class="chat-title" title="Click to rename">New chat</span>
+  </div>
+  <button class="icon-btn" id="newChat" title="New chat">+</button>
+</div>
+
+<div id="chatsPanel" class="chats-panel" style="display:none">
+  <div class="chats-head">
+    <input type="text" id="chatsSearch" placeholder="Search chats…" />
+    <button class="btn ghost small" id="chatsNewBtn">+ New</button>
+  </div>
+  <div id="chatsList" class="chats-list"></div>
+</div>
+
 <main id="logEl" class="chat-log" style="display:none">
   <div id="loadMoreWrap" class="load-more-wrap" style="display:none">
     <button class="btn ghost small" id="loadMoreBtn">Load previous messages</button>
@@ -38,13 +54,12 @@ const CHAT_BODY = `
 </main>
 
 <div id="composerWrap" class="composer-wrap" style="display:none">
-  <div class="composer-resizer" id="composerResizer"></div>
   <div id="composer" class="composer">
+    <div class="composer-resizer" id="composerResizer"></div>
     <textarea id="inp" rows="1" placeholder="Ask anything, or describe a task…"></textarea>
     <div class="composer-toolbar">
       <div class="toolbar-left">
         <button class="icon-btn" id="agentToggle" title="Agent mode (file edits)">A</button>
-        <button class="icon-btn" id="newChat" title="New chat">+</button>
         <div class="model-pill" id="modelPill" title="Select model">
           <span id="modelLabel">Loading…</span>
           <span class="pcaret">▾</span>
@@ -72,11 +87,11 @@ export class ChatView implements vscode.WebviewViewProvider {
     static readonly viewId = "onlysq.chat";
 
     private view?: vscode.WebviewView;
-    private history: ChatMessage[] = [];
+    private chats: ChatStore;
+    private activeChat: ChatSession | null = null;
     private windowStart = 0;
     private aborter?: AbortController;
     private subs: vscode.Disposable[] = [];
-    private historyStore: HistoryStore;
 
     constructor(
         private ctx: vscode.ExtensionContext,
@@ -85,9 +100,31 @@ export class ChatView implements vscode.WebviewViewProvider {
         private auth: AuthService,
         private modelsService: ModelsService
     ) {
-        this.historyStore = new HistoryStore(ctx);
-        this.history = this.historyStore.load();
-        this.windowStart = Math.max(0, this.history.length - 30);
+        this.chats = new ChatStore(ctx);
+        this.activeChat = this.chats.active();
+        this.windowStart = this.activeChat
+            ? Math.max(0, this.activeChat.messages.length - HISTORY_WINDOW)
+            : 0;
+    }
+
+    private get history(): ChatMessage[] {
+        return this.activeChat?.messages ?? [];
+    }
+
+    private async persistActive(): Promise<void> {
+        if (this.activeChat) {
+            await this.chats.updateMessages(
+                this.activeChat.id,
+                this.activeChat.messages
+            );
+        }
+    }
+
+    private async ensureActiveChat(): Promise<ChatSession> {
+        if (this.activeChat) return this.activeChat;
+        this.activeChat = await this.chats.create();
+        this.windowStart = 0;
+        return this.activeChat;
     }
 
     resolveWebviewView(view: vscode.WebviewView): void {
@@ -116,9 +153,7 @@ export class ChatView implements vscode.WebviewViewProvider {
         this.subs.push(this.auth.onChange((s) => this.pushAuth(s)));
         this.subs.push(
             view.onDidChangeVisibility(() => {
-                if (view.visible) {
-                    void this.pushAuth();
-                }
+                if (view.visible) void this.pushAuth();
             })
         );
         this.subs.push(
@@ -184,6 +219,7 @@ export class ChatView implements vscode.WebviewViewProvider {
         switch (m.type) {
             case "ready":
                 await this.pushAuth();
+                this.pushChatList();
                 if (this.history.length) this.pushHistoryWindow("replace");
                 return;
 
@@ -198,20 +234,64 @@ export class ChatView implements vscode.WebviewViewProvider {
                 return this.handleSend(m.text, m.mode);
 
             case "cancel":
-                Logger.log("[chat] cancel requested");
                 this.aborter?.abort();
                 return;
 
-            case "reset":
-                this.history = [];
+            case "newChat":
+                await this.chats.create();
+                this.activeChat = this.chats.active();
                 this.windowStart = 0;
-                void this.historyStore.clear();
+                this.pushChatList();
                 this.pushHistoryWindow("replace");
+                return;
+
+            case "switchChat":
+                if (typeof m.id === "string") {
+                    const c = await this.chats.setActive(m.id);
+                    if (c) {
+                        this.activeChat = c;
+                        this.windowStart = Math.max(
+                            0,
+                            c.messages.length - HISTORY_WINDOW
+                        );
+                        this.aborter?.abort();
+                        this.pushChatList();
+                        this.pushHistoryWindow("replace");
+                    }
+                }
+                return;
+
+            case "renameChat":
+                if (typeof m.id === "string" && typeof m.title === "string") {
+                    await this.chats.rename(m.id, m.title);
+                    if (this.activeChat && this.activeChat.id === m.id) {
+                        this.activeChat.title = m.title;
+                    }
+                    this.pushChatList();
+                }
+                return;
+
+            case "deleteChat":
+                if (typeof m.id === "string") {
+                    const wasActive = this.activeChat?.id === m.id;
+                    await this.chats.remove(m.id);
+                    if (wasActive) {
+                        this.activeChat = this.chats.active();
+                        this.windowStart = this.activeChat
+                            ? Math.max(
+                                  0,
+                                  this.activeChat.messages.length -
+                                      HISTORY_WINDOW
+                              )
+                            : 0;
+                        this.pushHistoryWindow("replace");
+                    }
+                    this.pushChatList();
+                }
                 return;
 
             case "loadMore":
                 return this.loadMore();
-
             case "trimToWindow":
                 return this.trimToWindow();
 
@@ -235,7 +315,6 @@ export class ChatView implements vscode.WebviewViewProvider {
                     await showDiff(m.id);
                 }
                 return;
-
             case "applyEdit":
                 if (typeof m.id === "string") {
                     const { applyProposal, getProposalState } = await import(
@@ -249,7 +328,6 @@ export class ChatView implements vscode.WebviewViewProvider {
                     });
                 }
                 return;
-
             case "rejectEdit":
                 if (typeof m.id === "string") {
                     const { rejectProposal } = await import(
@@ -266,10 +344,20 @@ export class ChatView implements vscode.WebviewViewProvider {
         }
     }
 
+    private pushChatList(): void {
+        if (!this.view) return;
+        this.view.webview.postMessage({
+            type: "chats",
+            list: this.chats.list(),
+            activeId: this.activeChat?.id ?? null,
+        });
+    }
+
     private async handleSend(
         text: string,
         mode: "chat" | "agent"
     ): Promise<void> {
+        await this.ensureActiveChat();
         this.aborter?.abort();
         const aborter = new AbortController();
         this.aborter = aborter;
@@ -293,7 +381,6 @@ export class ChatView implements vscode.WebviewViewProvider {
             : text;
         const systemPrompt = `You are OnlySq CLI, a coding assistant inside VS Code.
 - Answer in Markdown with fenced code blocks (\`\`\`lang).
-- "This file" / "selection" refers to the active editor context provided.
 - Be concise. Prefer code over prose when code is the answer.
 
 --- System context ---
@@ -301,7 +388,7 @@ ${systemBriefForLLM()}`;
         const messages: ChatMessage[] = [
             { role: "system", content: systemPrompt },
             ...this.history,
-            { role: "user", content: text },
+            { role: "user", content: userContent },
         ];
 
         let acc = "";
@@ -309,11 +396,7 @@ ${systemBriefForLLM()}`;
             {
                 model: settings().chatModel,
                 temperature: settings().temperature,
-                messages: [
-                    { role: "system", content: systemPrompt },
-                    ...this.history,
-                    { role: "user", content: userContent },
-                ],
+                messages,
             },
             signal
         )) {
@@ -322,10 +405,12 @@ ${systemBriefForLLM()}`;
                 this.post({ type: "token", text: d.content });
             }
         }
-        this.history.push({ role: "user", content: text });
-        this.history.push({ role: "assistant", content: acc });
+        this.activeChat!.messages.push({ role: "user", content: text });
+        this.activeChat!.messages.push({ role: "assistant", content: acc });
         this.post({ type: "done" });
         this.updateHistoryAfterTurn();
+        await this.persistActive();
+        this.pushChatList();
     }
 
     private async runAgentMode(
@@ -334,7 +419,7 @@ ${systemBriefForLLM()}`;
     ): Promise<void> {
         const ctx = await editorContextSnippet();
         const goal = ctx ? `${text}\n\n---\n**Editor context:**\n${ctx}` : text;
-        this.history = await runAgent(
+        const updated = await runAgent(
             this.client,
             this.registry,
             goal,
@@ -370,13 +455,15 @@ ${systemBriefForLLM()}`;
             signal,
             this.history
         );
+        if (this.activeChat) this.activeChat.messages = updated;
         this.updateHistoryAfterTurn();
+        await this.persistActive();
+        this.pushChatList();
     }
 
     private updateHistoryAfterTurn(): void {
-        this.windowStart = Math.max(0, this.history.length - 30);
+        this.windowStart = Math.max(0, this.history.length - HISTORY_WINDOW);
         this.notifyCanLoadMore();
-        void this.historyStore.save(this.history);
     }
 
     private loadMore(): void {
@@ -390,9 +477,7 @@ ${systemBriefForLLM()}`;
         });
         this.notifyCanLoadMore();
     }
-
     private trimToWindow(): void {
-        // when user scrolled all the way back to bottom — keep only window
         this.windowStart = Math.max(0, this.history.length - HISTORY_WINDOW);
         this.view?.webview.postMessage({
             type: "trimTo",
@@ -407,7 +492,6 @@ ${systemBriefForLLM()}`;
             value: this.windowStart > 0,
         });
     }
-
     private pushHistoryWindow(_mode: "replace"): void {
         const slice = this.history.slice(this.windowStart);
         this.view?.webview.postMessage({
@@ -422,13 +506,20 @@ ${systemBriefForLLM()}`;
     }
 
     private disposeSubs(): void {
-        for (const d of this.subs.splice(0)) {
+        for (const d of this.subs.splice(0))
             try {
                 d.dispose();
             } catch {
                 /* */
             }
-        }
+    }
+
+    async newChat(): Promise<void> {
+        await this.chats.create();
+        this.activeChat = this.chats.active();
+        this.windowStart = 0;
+        this.pushChatList();
+        this.pushHistoryWindow("replace");
     }
 }
 
