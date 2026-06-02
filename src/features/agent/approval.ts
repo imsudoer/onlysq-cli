@@ -6,7 +6,8 @@ export type ApprovalKind =
     | "delete"
     | "rename"
     | "shell"
-    | "vscodeCommand";
+    | "vscodeCommand"
+    | "web";
 
 export async function askApproval(
     kind: ApprovalKind,

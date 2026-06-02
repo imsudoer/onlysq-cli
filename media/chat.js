@@ -205,8 +205,21 @@
     );
     const inlineRe = new RegExp(BT + "([^" + BT + "\\n]+)" + BT, "g");
 
+    // Extract <thinking> blocks for reasoning display
+    var thinkingRe = /<thinking>([\s\S]*?)<\/thinking>/gi;
+
     function renderMarkdown(text) {
         if (!text) return "";
+        // Render thinking blocks first
+        var thinkingBlocks = "";
+        text = text.replace(thinkingRe, function(_, content) {
+            thinkingBlocks += '<div class="reasoning-block">' +
+                '<div class="reasoning-head" onclick="this.parentElement.classList.toggle(\'open\')">' +
+                '<span class="r-arrow">\u25B6</span> <span>Thinking\u2026</span></div>' +
+                '<div class="reasoning-body">' + escapeHtml(content.trim()) + '</div></div>';
+            return '';
+        });
+        if (!text.trim() && thinkingBlocks) return thinkingBlocks;
         let out = "";
         let last = 0;
         const re = new RegExp(fenceRe);
@@ -231,7 +244,7 @@
             last = m.index + m[0].length;
         }
         out += renderProse(text.slice(last));
-        return out;
+        return thinkingBlocks + out;
     }
     function renderProse(text) {
         if (!text) return "";
@@ -426,6 +439,12 @@
         );
     }
 
+    function estimateTokens(text) {
+        if (!text) return 0;
+        // Rough estimate: ~4 chars per token for English, ~2 for code
+        return Math.round(text.length / 3.5);
+    }
+
     function renderEmpty() {
         logBody.innerHTML = "";
         const e = el("div", "empty", logBody);
@@ -451,7 +470,8 @@
         const empty = logBody.querySelector(".empty");
         if (empty) empty.remove();
         const m = document.createElement("div");
-        m.className = "msg " + role;
+        m.className = "msg " + role + " new-msg";
+        setTimeout(function() { m.classList.remove("new-msg"); }, 200);
 
         const head = el("div", "msg-head", m);
         const r = el("span", "role", head);
@@ -473,6 +493,11 @@
         copyBtn.textContent = "Copy";
         copyBtn.title = "Copy text";
         copyBtn.addEventListener("click", () => copyText(m));
+
+        if (text && text.length > 10) {
+            var tokSpan = el("span", "msg-tokens", head);
+            tokSpan.textContent = "\u2248" + estimateTokens(text) + " tok";
+        }
 
         const body = el("div", "body", m);
         body.innerHTML = renderMarkdown(text);
@@ -667,6 +692,27 @@
             values,
             "bool"
         );
+        settingRow(
+            agent,
+            "Personalization",
+            "agent.personalization",
+            values,
+            "bool"
+        );
+        settingRow(
+            agent,
+            "Custom system prompt",
+            "agent.customSystemPrompt",
+            values,
+            "textarea"
+        );
+        settingRow(
+            agent,
+            "Disabled tools",
+            "agent.disabledTools",
+            values,
+            "textarea-list"
+        );
 
         const approval = el("section", "card", settingsBody);
         approval.innerHTML = '<div class="card-title">Approval policy</div>';
@@ -676,6 +722,7 @@
             ["Renames", "approval.rename"],
             ["Shell commands", "approval.shell"],
             ["VS Code commands", "approval.vscodeCommand"],
+            ["Web requests", "approval.web"],
         ].forEach(([label, key]) =>
             settingRow(approval, label, key, values, "enum-approval")
         );
@@ -760,6 +807,34 @@
                 modelSearch.value = "";
                 renderModels("");
                 setTimeout(() => modelSearch.focus(), 20);
+            });
+        } else if (kind === "textarea") {
+            var ta = document.createElement("textarea");
+            ta.className = "setting-input";
+            ta.style.width = "100%";
+            ta.style.minHeight = "50px";
+            ta.style.resize = "vertical";
+            ta.value = String(current ?? "");
+            ta.placeholder = "Enter custom instructions...";
+            ctl.appendChild(ta);
+            ta.addEventListener("change", function() {
+                vscode.postMessage({ type: "setSetting", key: key, value: ta.value });
+            });
+        } else if (kind === "textarea-list") {
+            var ta2 = document.createElement("textarea");
+            ta2.className = "setting-input";
+            ta2.style.width = "100%";
+            ta2.style.minHeight = "40px";
+            ta2.style.resize = "vertical";
+            ta2.value = Array.isArray(current) ? current.join(", ") : String(current ?? "");
+            ta2.placeholder = "run_command, delete_file, ...";
+            ctl.appendChild(ta2);
+            var hint = el("div", "small muted", ctl);
+            hint.textContent = "Comma-separated tool names to disable";
+            hint.style.marginTop = "2px";
+            ta2.addEventListener("change", function() {
+                var arr = ta2.value.split(",").map(function(s) { return s.trim(); }).filter(Boolean);
+                vscode.postMessage({ type: "setSetting", key: key, value: arr });
             });
         }
     }
@@ -984,6 +1059,10 @@
         delegate: "Delegating to",
         pause_agent: "Pausing",
         ask_user: "Asking",
+        fetch_url: "Fetching",
+        web_search: "Searching web",
+        scrape_page: "Scraping",
+        git_commit: "Committing",
     };
 
     function summarizeArgs(name, args) {
@@ -993,6 +1072,9 @@
             }
             if (name === "ask_user") return args?.question ? args.question.slice(0, 60) : "(question)";
             if (name === "pause_agent") return args?.reason ? args.reason.slice(0, 60) : "(pause)";
+            if (name === "fetch_url" || name === "scrape_page") return args?.url || "";
+            if (name === "web_search") return args?.query || "";
+            if (name === "git_commit") return args?.message ? args.message.slice(0, 60) : "";
             if (FILE_TOOLS.has(name) && args && args.path) {
                 if (name === "apply_at_line") {
                     const r =
@@ -1276,7 +1358,10 @@
         if (pauseBtn) {
             pauseBtn.classList.toggle("on", paused);
             pauseBtn.title = paused ? "Resume agent" : "Pause after current step";
-            pauseBtn.textContent = paused ? "\u25B6" : "\u2161";
+            // SVG: play triangle when paused, pause bars when running
+            pauseBtn.innerHTML = paused
+                ? '<svg viewBox="0 0 24 24"><polygon points="6,4 20,12 6,20" fill="currentColor" stroke="none"/></svg>'
+                : '<svg viewBox="0 0 24 24"><line x1="10" y1="6" x2="10" y2="18"/><line x1="14" y1="6" x2="14" y2="18"/></svg>';
         }
         if (paused) {
             showStatusPill(reason || "Paused. Press Resume to continue.");
@@ -1341,7 +1426,7 @@
     });
     document.addEventListener("click", (e) => {
         if (chatsPanel.style.display === "none") return;
-        if (!chatsPanel.contains(e.target) && e.target !== chatsBtn) {
+        if (!chatsPanel.contains(e.target) && !chatsBtn.contains(e.target)) {
             showChatsPanel(false);
         }
     });
@@ -1580,9 +1665,14 @@
                 clearStatusPill();
                 if (!currentBody) startAssistantBody();
                 currentAcc += m.text;
-                currentBody.innerHTML = renderMarkdown(currentAcc);
-                const parentMsg = currentBody.closest(".msg");
-                if (parentMsg) parentMsg.dataset.raw = currentAcc;
+                // Render without triggering animations on existing content
+                var rendered = renderMarkdown(currentAcc);
+                currentBody.innerHTML = rendered;
+                var parentMsg2 = currentBody.closest(".msg");
+                if (parentMsg2) {
+                    parentMsg2.dataset.raw = currentAcc;
+                    parentMsg2.classList.remove("new-msg");
+                }
                 currentBody.classList.add("cursor");
                 scrollToBottom();
                 break;
@@ -1617,6 +1707,8 @@
                     const e2 = el("div", "err small muted", logBody);
                     e2.textContent = "[" + m.reason + "]";
                 }
+                // Auto-group completed tool blocks
+                setTimeout(groupCompletedTools, 100);
                 break;
             case "error":
                 clearStatusPill();
@@ -2142,10 +2234,90 @@
         });
     }
 
-    // ========== Override send to include attached files ==========
-    var _origSend = send;
-    // We need to modify the send function to include attachments
-    // Already handled below via message interception
+    // ========== Tool Grouping: collapse completed tools ==========
+    function groupCompletedTools() {
+        var blocks = Array.from(logBody.querySelectorAll(".tool-block"));
+        var consecutive = [];
+        for (var i = 0; i < blocks.length; i++) {
+            var b = blocks[i];
+            var hasCheck = b.querySelector(".tcheck");
+            if (hasCheck && !b.classList.contains("open") && !b.closest(".tool-group-expanded")) {
+                consecutive.push(b);
+            } else {
+                if (consecutive.length >= 3) collapseGroup(consecutive);
+                consecutive = [];
+            }
+        }
+        if (consecutive.length >= 3) collapseGroup(consecutive);
+    }
+    function collapseGroup(blocks) {
+        var header = el("div", "tool-group-collapsed");
+        header.innerHTML = '<span class="tgc-icon">\u2713</span>' +
+            '<span>' + blocks.length + ' completed tools</span>' +
+            '<span class="tgc-arrow">\u25B6</span>';
+        var container = el("div", "tool-group-expanded");
+        var first = blocks[0];
+        first.parentNode.insertBefore(header, first);
+        first.parentNode.insertBefore(container, first);
+        blocks.forEach(function(b) { container.appendChild(b); });
+        header.addEventListener("click", function() {
+            header.classList.toggle("open");
+        });
+    }
+
+    // ========== Context Pins ==========
+    var contextPinsEl = $("contextPins");
+    var contextPins = []; // { path, content }
+    function addContextPin(path, content) {
+        if (contextPins.some(function(p) { return p.path === path; })) return;
+        contextPins.push({ path: path, content: content || "" });
+        renderContextPins();
+    }
+    function removeContextPin(path) {
+        contextPins = contextPins.filter(function(p) { return p.path !== path; });
+        renderContextPins();
+    }
+    function renderContextPins() {
+        if (!contextPinsEl) return;
+        contextPinsEl.innerHTML = "";
+        contextPins.forEach(function(pin) {
+            var chip = el("div", "pin-chip", contextPinsEl);
+            chip.innerHTML = '<span class="pin-icon">\ud83d\udccc</span><span>' + escapeHtml(pin.path.split('/').pop() || pin.path) + '</span>';
+            chip.title = pin.path;
+            var rm = el("button", "pin-remove", chip);
+            rm.textContent = "\u00d7";
+            rm.addEventListener("click", function() { removeContextPin(pin.path); });
+        });
+    }
+
+    // ========== Image preview in attachments ==========
+    var _origRenderAttached = renderAttachedFiles;
+    renderAttachedFiles = function() {
+        if (!attachedFilesEl) return;
+        attachedFilesEl.innerHTML = "";
+        attachedFiles.forEach(function (af, idx) {
+            var chip = el("div", "attached-file" + (af.isImage ? " is-image" : ""), attachedFilesEl);
+            if (af.isImage && af.content) {
+                var img = document.createElement("img");
+                img.className = "af-preview";
+                img.src = af.content;
+                chip.appendChild(img);
+            }
+            var nameSpan = el("span", "af-name", chip);
+            nameSpan.textContent = af.name;
+            var removeBtn = el("button", "af-remove", chip);
+            removeBtn.textContent = "\u00d7";
+            removeBtn.addEventListener("click", function () {
+                attachedFiles.splice(idx, 1);
+                renderAttachedFiles();
+            });
+        });
+    };
+
+    // Auto-group tools when streaming ends
+    var _origDoneHandler = null;
+    // We hook into the done case — after it finishes we group
+    // (done is already handled above, we call groupCompletedTools after)
 
     showSettings(false);
     showChatsPanel(false);

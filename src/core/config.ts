@@ -52,10 +52,14 @@ export interface Settings {
         rename: ApprovalMode;
         shell: ApprovalMode;
         vscodeCommand: ApprovalMode;
+        web: ApprovalMode;
     };
     parallelTools: boolean;
     toolCache: boolean;
     persistHistory: boolean;
+    customSystemPrompt: string;
+    personalization: boolean;
+    disabledTools: string[];
 }
 
 export function settings(): Settings {
@@ -79,10 +83,14 @@ export function settings(): Settings {
             rename: ap("rename", "ask"),
             shell: ap("shell", "ask"),
             vscodeCommand: ap("vscodeCommand", "ask"),
+            web: ap("web", "ask"),
         },
         parallelTools: c.get("agent.parallelTools", true),
         toolCache: c.get("agent.toolCache", true),
         persistHistory: c.get("chat.persistHistory", true),
+        customSystemPrompt: c.get("agent.customSystemPrompt", ""),
+        personalization: c.get("agent.personalization", false),
+        disabledTools: c.get<string[]>("agent.disabledTools", []),
     };
 }
 

@@ -1,20 +1,22 @@
 # Changelog
 
-## 0.2.0 — 2026-06-02
+## 0.2.0 & 0.2.1 — 2026-06-02
 
 ### Sub-agents
+
 - **`delegate` tool** — the agent can now delegate tasks to 8 specialized sub-agents:
-  - `code_reviewer` — find bugs, security issues (read-only)
-  - `code_writer` — implement code changes
-  - `test_runner` — run and fix tests
-  - `explorer` — explore codebase structure (read-only)
-  - `shell_operator` — DevOps/system tasks
-  - `refactorer` — restructure code preserving behavior
-  - `doc_writer` — write documentation
-  - `planner` — break complex goals into steps (read-only)
+    - `code_reviewer` — find bugs, security issues (read-only)
+    - `code_writer` — implement code changes
+    - `test_runner` — run and fix tests
+    - `explorer` — explore codebase structure (read-only)
+    - `shell_operator` — DevOps/system tasks
+    - `refactorer` — restructure code preserving behavior
+    - `doc_writer` — write documentation
+    - `planner` — break complex goals into steps (read-only)
 - Sub-agents run in isolated contexts with limited tool sets and own system prompts.
 
 ### UI / Design
+
 - **SVG icons** — all header, toolbar, and action buttons now use clean inline SVG icons instead of text characters.
 - **Wave thinking indicator** — three dots animate in a wave pattern instead of the old pulsing pill.
 - **Enhanced Markdown rendering** — code blocks have a language label header and a **Copy** button; markdown tables render as proper HTML.
@@ -25,8 +27,29 @@
 - **Export chat** — save conversation as **Markdown** or **JSON**.
 
 ### Agent
+
 - **Live messages during run** — send messages while the agent is working; they are injected into the next iteration.
-- Improved round buttons for Send/Stop with SVG arrows.
+- **Web tools** — `fetch_url`, `web_search` (DuckDuckGo), `scrape_page` (HTML → text).
+- **`git_commit` tool** — stage changes and commit with a message.
+- **Custom system prompt** — append custom instructions via settings.
+- **Personalization toggle** — let the agent learn your preferences.
+- **Disabled tools** — disable specific tools by name in settings.
+- **Per-tool approval** — separate approval policy for web requests.
+
+### Bug fixes
+
+- **Fixed flicker** — streaming no longer re-triggers CSS animations on every token.
+- **Fixed pause double-press** — `pause_agent` tool now correctly pauses on first press.
+- **Fixed chats button SVG** — click on SVG icon inside button now works.
+- **Pause button redesign** — round button with SVG pause/play icons matching send/stop.
+
+### UI
+
+- **Tool grouping** — 3+ consecutive completed tools collapse into "N completed tools" with expand button.
+- **Reasoning display** — `<thinking>` blocks render in collapsible italic blocks.
+- **Token counter** — approximate token count shown per message.
+- **Context pins** — pin files as persistent context for the session.
+- **Image preview** — attached images show thumbnail previews in the composer.
 
 ## 0.1.0 — 2026-06-01
 

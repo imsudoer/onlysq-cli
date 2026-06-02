@@ -77,14 +77,21 @@ export async function runAgent(
     const cfg = settings();
     const cache = new ToolCache(cfg.toolCache);
 
-    const systemPrompt = `${SYSTEM_BASE}\n\n--- System context ---\n${systemBriefForLLM()}`;
+    let systemPrompt = `${SYSTEM_BASE}\n\n--- System context ---\n${systemBriefForLLM()}`;
+    if (cfg.customSystemPrompt) {
+        systemPrompt += `\n\n--- Custom instructions ---\n${cfg.customSystemPrompt}`;
+    }
+    if (cfg.personalization) {
+        systemPrompt += `\n\n--- Personalization ---\nLearn the user's preferences, coding style, and patterns from this conversation. Adapt your responses accordingly. Remember what they like and dislike.`;
+    }
 
     const messages: ChatMessage[] = [
         { role: "system", content: systemPrompt },
         ...history,
         { role: "user", content: goal },
     ];
-    const tools = registry.list();
+    const disabled = new Set(cfg.disabledTools);
+    const tools = registry.list().filter(t => !disabled.has(t.function.name));
 
     Logger.log(
         `[agent] starting run, history=${history.length}, tools=${tools.length}, max_steps=${cfg.maxAgentSteps}`

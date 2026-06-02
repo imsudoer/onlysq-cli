@@ -66,6 +66,7 @@ const CHAT_BODY = `
 </main>
 
 <div id="composerWrap" class="composer-wrap" style="display:none">
+  <div id="contextPins" class="context-pins"></div>
   <div id="mentionPopup" class="mention-popup"></div>
   <div id="dropOverlay" class="drop-overlay"><div class="drop-overlay-inner">Drop files here</div></div>
   <div id="attachedFiles" class="attached-files"></div>
@@ -81,7 +82,7 @@ const CHAT_BODY = `
         </div>
       </div>
       <div class="toolbar-right">
-        <button class="pause-btn" id="pauseBtn" title="Pause after current step" style="display:none">Ⅱ</button>
+        <button class="pause-btn" id="pauseBtn" title="Pause after current step" style="display:none"><svg viewBox="0 0 24 24"><line x1="10" y1="6" x2="10" y2="18"/><line x1="14" y1="6" x2="14" y2="18"/></svg></button>
         <button class="send-btn" id="sendBtn" title="Send (Enter)" disabled><svg viewBox="0 0 24 24"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg></button>
         <button class="stop-btn" id="stopBtn" title="Stop" style="display:none"><svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1"/></svg></button>
       </div>
@@ -184,6 +185,10 @@ export class ChatView implements vscode.WebviewViewProvider {
                     "approval.vscodeCommand",
                     "ask"
                 ),
+                "approval.web": c.get("approval.web", "ask"),
+                "agent.customSystemPrompt": c.get("agent.customSystemPrompt", ""),
+                "agent.personalization": c.get("agent.personalization", false),
+                "agent.disabledTools": c.get("agent.disabledTools", []),
             },
         });
     }
@@ -709,11 +714,7 @@ export class ChatView implements vscode.WebviewViewProvider {
                         });
                         break;
                     case "pause":
-                        this.post({
-                            type: "pauseState",
-                            paused: true,
-                            reason: e.reason ?? null,
-                        });
+                        this.setPaused(true, e.reason);
                         break;
                     case "done":
                         this.post({ type: "done", reason: e.reason });

@@ -2,7 +2,7 @@
     "name": "onlysq-cli",
     "displayName": "OnlySq CLI",
     "description": "AI coding assistant by OnlySq — inline completions, chat, and agent mode with native diff previews",
-    "version": "0.2.0",
+    "version": "0.2.1",
     "publisher": "subashev",
     "repository": {
         "type": "git",
@@ -255,6 +255,35 @@
                     ],
                     "default": "ask",
                     "description": "Approval for arbitrary VS Code commands."
+                },
+                "onlysq.approval.web": {
+                    "type": "string",
+                    "enum": [
+                        "always",
+                        "ask",
+                        "never"
+                    ],
+                    "default": "ask",
+                    "description": "Approval for web requests (fetch_url, web_search, scrape_page)."
+                },
+                "onlysq.agent.customSystemPrompt": {
+                    "type": "string",
+                    "default": "",
+                    "editPresentation": "multilineText",
+                    "description": "Custom instructions appended to the agent system prompt."
+                },
+                "onlysq.agent.personalization": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Let the agent learn your preferences from conversations."
+                },
+                "onlysq.agent.disabledTools": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "default": [],
+                    "description": "List of tool names to disable (e.g. [\"run_command\", \"delete_file\"])."
                 }
             }
         }

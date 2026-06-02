@@ -39,6 +39,7 @@ import {
     ReplaceOp,
 } from "../../services/workspace/replaceInFile";
 import { SUBAGENTS } from "./subagentDefs";
+import { fetchUrl, webSearch, scrapePage } from "../../services/workspace/web";
 
 const obj = (props: Record<string, any>, required: string[] = []) => ({
     type: "object",
@@ -1063,6 +1064,133 @@ export const builtinTools: ToolHandler[] = [
                 return JSON.stringify(r ?? null);
             } catch {
                 return String(r);
+            }
+        },
+    },
+
+    {
+        def: {
+            type: "function",
+            function: {
+                name: "fetch_url",
+                description:
+                    "Fetch a URL and return the response. Useful for APIs, documentation pages, raw files. " +
+                    "Returns status, content-type, and body (max 100KB).",
+                parameters: obj(
+                    {
+                        url: str("URL to fetch"),
+                        method: { type: "string", enum: ["GET", "POST", "PUT", "DELETE"], description: 'Default GET' },
+                        headers: { type: "object", description: "Optional request headers", additionalProperties: { type: "string" } },
+                    },
+                    ["url"]
+                ),
+            },
+        },
+        run: async (a: any) => {
+            if (!(await askApproval("web", `Fetch ${a.url}?`)))
+                return "User denied web request";
+            try {
+                const r = await fetchUrl(String(a.url), {
+                    method: a.method,
+                    headers: a.headers,
+                });
+                let out = `HTTP ${r.status} (${r.contentType})\n`;
+                if (r.truncated) out += "(truncated to 100KB)\n";
+                out += "---\n" + r.body;
+                return out;
+            } catch (e: any) {
+                return `Error: ${e?.message ?? e}`;
+            }
+        },
+    },
+
+    {
+        def: {
+            type: "function",
+            function: {
+                name: "web_search",
+                description:
+                    "Search the web and return top results with titles, URLs, and snippets. " +
+                    "Uses DuckDuckGo. Good for finding documentation, packages, solutions.",
+                parameters: obj(
+                    {
+                        query: str("Search query"),
+                        max_results: num("Max results, default 5"),
+                    },
+                    ["query"]
+                ),
+            },
+        },
+        run: async (a: any) => {
+            if (!(await askApproval("web", `Web search: ${a.query}?`)))
+                return "User denied web search";
+            try {
+                return await webSearch(String(a.query), a.max_results ?? 5);
+            } catch (e: any) {
+                return `Error: ${e?.message ?? e}`;
+            }
+        },
+    },
+
+    {
+        def: {
+            type: "function",
+            function: {
+                name: "scrape_page",
+                description:
+                    "Download a web page and extract its text content (strips HTML tags, scripts, styles). " +
+                    "Use for reading documentation, articles, READMEs on the web.",
+                parameters: obj(
+                    { url: str("URL to scrape") },
+                    ["url"]
+                ),
+            },
+        },
+        run: async (a: any) => {
+            if (!(await askApproval("web", `Scrape ${a.url}?`)))
+                return "User denied scraping";
+            try {
+                return await scrapePage(String(a.url));
+            } catch (e: any) {
+                return `Error: ${e?.message ?? e}`;
+            }
+        },
+    },
+
+    {
+        def: {
+            type: "function",
+            function: {
+                name: "git_commit",
+                description:
+                    "Stage changes and create a git commit with the given message. " +
+                    "Optionally specify files to stage (default: all changes).",
+                parameters: obj(
+                    {
+                        message: str("Commit message"),
+                        files: arr(str(""), "Optional list of file paths to stage. If empty, stages all changes."),
+                    },
+                    ["message"]
+                ),
+            },
+        },
+        run: async (a: any) => {
+            if (!(await askApproval("shell", `Git commit: ${a.message}?`)))
+                return "User denied commit";
+            try {
+                const { executeShell, formatShellResult } = await import("../../services/workspace/shell");
+                const files = Array.isArray(a.files) && a.files.length
+                    ? a.files.map((f: any) => `"${String(f)}"`).join(" ")
+                    : ".";
+                const addResult = await executeShell(`git add ${files}`, { timeoutMs: 10_000 });
+                if (addResult.code !== 0) return `git add failed:\n${formatShellResult(addResult)}`;
+                const commitResult = await executeShell(
+                    `git commit -m "${String(a.message).replace(/"/g, '\\"')}"`,
+                    { timeoutMs: 10_000 }
+                );
+                return formatShellResult(commitResult);
+            } catch (e: any) {
+                return `Error: ${e?.message ?? e}`;
             }
         },
     },
