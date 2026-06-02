@@ -38,6 +38,7 @@ import {
     previewReplaceInFile,
     ReplaceOp,
 } from "../../services/workspace/replaceInFile";
+import { SUBAGENTS } from "./subagentDefs";
 
 const obj = (props: Record<string, any>, required: string[] = []) => ({
     type: "object",
@@ -1063,6 +1064,43 @@ export const builtinTools: ToolHandler[] = [
             } catch {
                 return String(r);
             }
+        },
+    },
+
+    {
+        def: {
+            type: "function",
+            function: {
+                name: "delegate",
+                description:
+                    "Delegate a task to a specialized sub-agent. Available sub-agents:\n" +
+                    Object.entries(SUBAGENTS)
+                        .map(([k, v]) => `  - ${k}: ${v.description}`)
+                        .join("\n") +
+                    "\nThe sub-agent runs in its own context with limited tools, does NOT see your conversation history, and returns a text result. " +
+                    "Use this when a task is well-defined and can be solved independently.",
+                parameters: obj(
+                    {
+                        agent: {
+                            type: "string",
+                            enum: Object.keys(SUBAGENTS),
+                            description: "Which sub-agent to use",
+                        },
+                        goal: str(
+                            "Clear, self-contained task description for the sub-agent. Include all context it needs — it cannot see your history."
+                        ),
+                    },
+                    ["agent", "goal"]
+                ),
+            },
+        },
+        run: async (a: any, _ctx) => {
+            const def = SUBAGENTS[a.agent];
+            if (!def)
+                return `Error: unknown sub-agent "${a.agent}". Available: ${Object.keys(SUBAGENTS).join(", ")}`;
+            return (
+                "__DELEGATE__:" + a.agent + ":" + String(a.goal ?? "")
+            );
         },
     },
 ];

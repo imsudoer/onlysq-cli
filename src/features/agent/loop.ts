@@ -5,6 +5,7 @@ import { settings } from "../../core/config";
 import { ToolCache } from "./toolCache";
 import { systemBriefForLLM } from "../../core/systemInfo";
 import { Logger } from "../../core/logger";
+import { SUBAGENTS } from "./subagentDefs";
 
 export type AgentEvent =
     | { type: "token"; text: string }
@@ -19,6 +20,7 @@ export interface AgentControl {
     shouldPause: () => boolean;
     waitIfPaused: (reason?: string) => Promise<void>;
     askUser?: (callId: string) => Promise<string>;
+    getLiveMessages?: () => ChatMessage[];
 }
 
 const SYSTEM_BASE = `You are OnlySq CLI, an autonomous coding agent operating inside VS Code.
@@ -49,6 +51,17 @@ const SYSTEM_BASE = `You are OnlySq CLI, an autonomous coding agent operating in
     - run_command — captures stdout/stderr.
     - run_command_interactive — fire-and-forget into terminal.
     - Respect the user's shell. Do NOT chain commands with operators the shell doesn't support.
+    
+    12. For complex tasks, use delegate() to hand off well-defined subtasks to specialized sub-agents:
+    - code_reviewer: find bugs and security issues (read-only)
+    - code_writer: implement changes
+    - test_runner: run and fix tests
+    - explorer: understand codebase structure (read-only)
+    - shell_operator: system/DevOps tasks
+    - refactorer: restructure code preserving behavior
+    - doc_writer: write documentation
+    - planner: break complex goals into steps (read-only)
+    Sub-agents work in isolation — include all necessary context in the goal.
     
     Be concise. Don't dump file contents back at the user unless asked.`;
 
@@ -216,6 +229,21 @@ export async function runAgent(
                 Logger.log(`[agent] ask_user answer: ${result.slice(0, 200)}`);
             }
 
+            if (result.startsWith("__DELEGATE__:") && tc.function.name === "delegate") {
+                const parts = result.slice("__DELEGATE__:".length);
+                const colonIdx = parts.indexOf(":");
+                const agentName = parts.slice(0, colonIdx);
+                const delegateGoal = parts.slice(colonIdx + 1);
+                const subDef = SUBAGENTS[agentName];
+                if (!subDef) {
+                    result = `Error: unknown sub-agent "${agentName}"`;
+                } else {
+                    Logger.log(`[agent] delegating to ${agentName}: ${delegateGoal.slice(0, 200)}`);
+                    const { runSubAgent } = await import("./subagent");
+                    result = await runSubAgent(subDef, client, registry, delegateGoal, onEvent, signal, control);
+                }
+            }
+
             Logger.log(
                 `[agent] <- ${tc.function.name} result (${
                     result.length
@@ -256,6 +284,17 @@ export async function runAgent(
         if (signal?.aborted) {
             onEvent({ type: "done", reason: "cancelled" });
             return messages;
+        }
+
+        // Inject live messages from user sent during agent run
+        if (control?.getLiveMessages) {
+            const live = control.getLiveMessages();
+            if (live.length) {
+                Logger.log(`[agent] injecting ${live.length} live message(s)`);
+                for (const lm of live) {
+                    messages.push(lm);
+                }
+            }
         }
     }
 

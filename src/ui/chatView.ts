@@ -27,12 +27,19 @@ const CHAT_BODY = `
 </div>
 
 <div id="chatHeader" class="chat-header" style="display:none">
-  <button class="icon-btn" id="chatsBtn" title="Chats">≡</button>
+  <button class="icon-btn" id="chatsBtn" title="Chats"><svg viewBox="0 0 24 24"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg></button>
   <div class="chat-title-wrap">
     <span id="chatTitle" class="chat-title" title="Click to rename">New chat</span>
   </div>
-  <button class="icon-btn" id="newChat" title="New chat">+</button>
-  <button class="icon-btn" id="settingsBtn" title="Settings">⚙</button>
+  <button class="icon-btn" id="newChat" title="New chat"><svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
+  <div style="position:relative;display:inline-block">
+    <button class="icon-btn" id="exportBtn" title="Export chat"><svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>
+    <div id="exportMenu" class="export-menu">
+      <button class="export-menu-item" data-format="markdown">Export as Markdown</button>
+      <button class="export-menu-item" data-format="json">Export as JSON</button>
+    </div>
+  </div>
+  <button class="icon-btn" id="settingsBtn" title="Settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09a1.65 1.65 0 00-1.08-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09a1.65 1.65 0 001.51-1.08 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001.08 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1.08z"/></svg></button>
 </div>
 
 <div id="chatsPanel" class="chats-panel" style="display:none">
@@ -46,7 +53,7 @@ const CHAT_BODY = `
 <div id="settingsPanel" class="settings-panel" style="display:none">
   <div class="settings-head">
     <span>Settings</span>
-    <button class="icon-btn" id="settingsClose" title="Close">×</button>
+    <button class="icon-btn" id="settingsClose" title="Close"><svg viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
   </div>
   <div id="settingsBody" class="settings-body"></div>
 </div>
@@ -59,12 +66,15 @@ const CHAT_BODY = `
 </main>
 
 <div id="composerWrap" class="composer-wrap" style="display:none">
+  <div id="mentionPopup" class="mention-popup"></div>
+  <div id="dropOverlay" class="drop-overlay"><div class="drop-overlay-inner">Drop files here</div></div>
+  <div id="attachedFiles" class="attached-files"></div>
   <div id="composer" class="composer">
     <div class="composer-resizer" id="composerResizer"></div>
-    <textarea id="inp" rows="1" placeholder="Ask anything, or describe a task…"></textarea>
+    <textarea id="inp" rows="1" placeholder="Ask anything, or @ to mention a file…"></textarea>
     <div class="composer-toolbar">
       <div class="toolbar-left">
-        <button class="icon-btn" id="agentToggle" title="Agent mode (file edits)">A</button>
+        <button class="icon-btn" id="agentToggle" title="Agent mode (file edits)"><svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg></button>
         <div class="model-pill" id="modelPill" title="Select model">
           <span id="modelLabel">Loading…</span>
           <span class="pcaret">▾</span>
@@ -72,8 +82,8 @@ const CHAT_BODY = `
       </div>
       <div class="toolbar-right">
         <button class="pause-btn" id="pauseBtn" title="Pause after current step" style="display:none">Ⅱ</button>
-        <button class="send-btn" id="sendBtn" title="Send (Enter)" disabled>↑</button>
-        <button class="stop-btn" id="stopBtn" title="Stop" style="display:none">■</button>
+        <button class="send-btn" id="sendBtn" title="Send (Enter)" disabled><svg viewBox="0 0 24 24"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg></button>
+        <button class="stop-btn" id="stopBtn" title="Stop" style="display:none"><svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1"/></svg></button>
       </div>
     </div>
   </div>
@@ -102,6 +112,7 @@ export class ChatView implements vscode.WebviewViewProvider {
     private paused = false;
     private pauseWaiter: (() => void) | null = null;
     private askResolvers = new Map<string, (answer: string) => void>();
+    private liveMessages: import("../services/llm/types").ChatMessage[] = [];
 
     constructor(
         private ctx: vscode.ExtensionContext,
@@ -300,6 +311,12 @@ export class ChatView implements vscode.WebviewViewProvider {
                     await this.pushAuth();
                     return;
                 }
+                // If agent is running, queue as live message instead of starting new run
+                if (this.isRunning && m.mode === "agent") {
+                    this.liveMessages.push({ role: "user", content: m.text });
+                    Logger.log(`[chat] queued live message during agent run: ${m.text.slice(0, 80)}`);
+                    return;
+                }
                 return this.handleSend(m.text, m.mode);
 
             case "cancel":
@@ -480,6 +497,89 @@ export class ChatView implements vscode.WebviewViewProvider {
                     vscode.Uri.parse(SAUTH.dashboard)
                 );
                 return;
+
+            case "exportChat":
+                if (typeof m.format === "string") {
+                    await this.exportChat(m.format as "markdown" | "json");
+                }
+                return;
+
+            case "undoLastEdit":
+                if (typeof m.id === "string") {
+                    const { undoProposal } = await import(
+                        "../services/workspace/diffPreview"
+                    );
+                    const ok = await undoProposal(m.id);
+                    this.view?.webview.postMessage({
+                        type: "undoResult",
+                        id: m.id,
+                        success: ok,
+                    });
+                }
+                return;
+
+            case "applyAllEdits":
+                if (Array.isArray(m.ids)) {
+                    const { applyProposal, getProposalState } = await import(
+                        "../services/workspace/diffPreview"
+                    );
+                    for (const id of m.ids) {
+                        await applyProposal(id).catch(() => {});
+                        this.view?.webview.postMessage({
+                            type: "editResult",
+                            id,
+                            state: getProposalState(id) === "applied" ? "applied" : "error",
+                        });
+                    }
+                }
+                return;
+
+            case "rejectAllEdits":
+                if (Array.isArray(m.ids)) {
+                    const { rejectProposal } = await import(
+                        "../services/workspace/diffPreview"
+                    );
+                    for (const id of m.ids) {
+                        rejectProposal(id);
+                        this.view?.webview.postMessage({
+                            type: "editResult",
+                            id,
+                            state: "rejected",
+                        });
+                    }
+                }
+                return;
+
+            case "mentionSearch":
+                if (typeof m.query === "string") {
+                    const { findFiles } = await import(
+                        "../services/workspace/fs"
+                    );
+                    const q = m.query.replace(/[\\/:]/g, "").trim();
+                    const glob = q ? `**/*${q}*` : "**/*";
+                    const files = await findFiles(glob, 15);
+                    this.view?.webview.postMessage({
+                        type: "mentionResults",
+                        files,
+                    });
+                }
+                return;
+
+            case "readFileContent":
+                if (typeof m.path === "string") {
+                    try {
+                        const { readText } = await import(
+                            "../services/workspace/fs"
+                        );
+                        const text = await readText(m.path, 50_000);
+                        this.view?.webview.postMessage({
+                            type: "fileContent",
+                            path: m.path,
+                            content: text,
+                        });
+                    } catch {}
+                }
+                return;
         }
     }
 
@@ -629,8 +729,13 @@ export class ChatView implements vscode.WebviewViewProvider {
                 shouldPause: () => this.paused,
                 waitIfPaused: (reason?: string) => this.waitIfPaused(reason),
                 askUser: (callId: string) => this.askUser(callId),
+                getLiveMessages: () => {
+                    const msgs = this.liveMessages.splice(0);
+                    return msgs;
+                },
             }
         );
+        this.liveMessages = [];
         if (this.activeChat) this.activeChat.messages = updated;
         this.updateHistoryAfterTurn();
         await this.persistActive();
@@ -710,6 +815,59 @@ export class ChatView implements vscode.WebviewViewProvider {
 
     private post(msg: any): void {
         this.view?.webview.postMessage(msg);
+    }
+
+    private async exportChat(format: "markdown" | "json"): Promise<void> {
+        if (!this.activeChat || !this.history.length) {
+            vscode.window.showWarningMessage("OnlySq: nothing to export");
+            return;
+        }
+        const title = this.activeChat.title || "chat";
+        const safeTitle = title.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 40);
+
+        if (format === "json") {
+            const data = {
+                title: this.activeChat.title,
+                id: this.activeChat.id,
+                createdAt: this.activeChat.createdAt,
+                updatedAt: this.activeChat.updatedAt,
+                messages: this.history.filter(
+                    (m) => m.role === "user" || m.role === "assistant"
+                ).map(m => ({ role: m.role, content: m.content ?? "" })),
+            };
+            const content = JSON.stringify(data, null, 2);
+            const uri = await vscode.window.showSaveDialog({
+                defaultUri: vscode.Uri.file(`${safeTitle}.json`),
+                filters: { JSON: ["json"] },
+            });
+            if (uri) {
+                await vscode.workspace.fs.writeFile(
+                    uri,
+                    Buffer.from(content, "utf-8")
+                );
+                vscode.window.showInformationMessage(`Exported to ${uri.fsPath}`);
+            }
+        } else {
+            let md = `# ${title}\n\n`;
+            for (const m of this.history) {
+                if (m.role === "user") {
+                    md += `## You\n\n${m.content ?? ""}\n\n`;
+                } else if (m.role === "assistant") {
+                    md += `## OnlySq\n\n${m.content ?? ""}\n\n`;
+                }
+            }
+            const uri = await vscode.window.showSaveDialog({
+                defaultUri: vscode.Uri.file(`${safeTitle}.md`),
+                filters: { Markdown: ["md"] },
+            });
+            if (uri) {
+                await vscode.workspace.fs.writeFile(
+                    uri,
+                    Buffer.from(md, "utf-8")
+                );
+                vscode.window.showInformationMessage(`Exported to ${uri.fsPath}`);
+            }
+        }
     }
 
     private disposeSubs(): void {

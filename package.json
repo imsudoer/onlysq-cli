@@ -2,7 +2,7 @@
     "name": "onlysq-cli",
     "displayName": "OnlySq CLI",
     "description": "AI coding assistant by OnlySq — inline completions, chat, and agent mode with native diff previews",
-    "version": "0.1.8",
+    "version": "0.2.0",
     "publisher": "subashev",
     "repository": {
         "type": "git",
@@ -112,7 +112,8 @@
                     "type": "webview",
                     "id": "onlysq.chat",
                     "name": "",
-                    "contextualTitle": "OnlySq"
+                    "contextualTitle": "OnlySq",
+                    "icon": "media/icon-mono.svg"
                 }
             ]
         },

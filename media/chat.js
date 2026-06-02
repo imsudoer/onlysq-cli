@@ -60,6 +60,11 @@
     const settingsPanel = $("settingsPanel");
     const settingsClose = $("settingsClose");
     const settingsBody = $("settingsBody");
+    const exportBtn = $("exportBtn");
+    const exportMenu = $("exportMenu");
+    const mentionPopup = $("mentionPopup");
+    const dropOverlay = $("dropOverlay");
+    const attachedFilesEl = $("attachedFiles");
 
     let mode = "chat";
     let currentBody = null;
@@ -80,6 +85,13 @@
     let userScrolling = false;
     let userScrollEndTimer;
     let scrollTrimDebounce;
+    let mentionActive = false;
+    let mentionStart = -1;
+    let mentionIdx = 0;
+    let mentionItems = [];
+    let attachedFiles = []; // {name, path, content}
+    let pendingEditIds = []; // for multi-diff
+    let lastAppliedEditId = null; // for undo
 
     let savedHeight =
         parseInt(localStorage.getItem("onlysq.composerH") || "0", 10) || 0;
@@ -203,12 +215,19 @@
             out += renderProse(text.slice(last, m.index));
             const lang = m[1] || "";
             const code = m[2];
+            const langLabel = lang ? escapeHtml(lang) : "code";
+            const escapedCode = escapeHtml(code);
             out +=
+                '<div class="code-block-wrap">' +
+                '<div class="code-block-header">' +
+                '<span class="code-lang">' + langLabel + '</span>' +
+                '<button class="code-copy-btn" data-code="' + escapedCode.replace(/"/g, '&quot;') + '">Copy</button>' +
+                '</div>' +
                 '<pre><code class="lang-' +
                 escapeHtml(lang) +
                 '">' +
                 highlightCode(code, lang) +
-                "</code></pre>";
+                "</code></pre></div>";
             last = m.index + m[0].length;
         }
         out += renderProse(text.slice(last));
@@ -230,6 +249,10 @@
             );
         }
         const lines = trimmed.split("\n");
+        // Table detection
+        if (lines.length >= 2 && /^\|/.test(lines[0]) && /^[\|\s:-]+$/.test(lines[1])) {
+            return renderTable(lines);
+        }
         if (lines.every((l) => /^\s*[-*+]\s+/.test(l) || /^\s+/.test(l))) {
             return renderList(lines, false);
         }
@@ -244,6 +267,24 @@
         }
         if (/^(-{3,}|\*{3,}|_{3,})$/.test(trimmed)) return "<hr/>";
         return "<p>" + renderInlineMd(trimmed.replace(/\n/g, " ")) + "</p>";
+    }
+    function renderTable(lines) {
+        var headerCells = lines[0].split("|").map(function(c) { return c.trim(); }).filter(Boolean);
+        var rows = [];
+        for (var i = 2; i < lines.length; i++) {
+            if (!lines[i].trim() || !/^\|/.test(lines[i])) break;
+            rows.push(lines[i].split("|").map(function(c) { return c.trim(); }).filter(Boolean));
+        }
+        var html = "<table><thead><tr>";
+        headerCells.forEach(function(c) { html += "<th>" + renderInlineMd(c) + "</th>"; });
+        html += "</tr></thead><tbody>";
+        rows.forEach(function(row) {
+            html += "<tr>";
+            row.forEach(function(c) { html += "<td>" + renderInlineMd(c) + "</td>"; });
+            html += "</tr>";
+        });
+        html += "</tbody></table>";
+        return html;
     }
     function renderList(lines, ordered) {
         const tag = ordered ? "ol" : "ul";
@@ -815,9 +856,12 @@
     function showStatusPill(text) {
         clearStatusPill();
         statusPill = el("div", "status-pill", logBody);
-        statusPill.innerHTML =
-            '<span class="sdot"></span><span class="stext"></span>';
-        statusPill.querySelector(".stext").textContent = text;
+        var dots = el("div", "status-dots", statusPill);
+        el("span", "", dots);
+        el("span", "", dots);
+        el("span", "", dots);
+        var label = el("span", "stext", statusPill);
+        label.textContent = text;
         scrollToBottom();
     }
 
@@ -937,10 +981,18 @@
         run_command_interactive: "Starting",
         git_status: "Git status",
         git_diff: "Git diff",
+        delegate: "Delegating to",
+        pause_agent: "Pausing",
+        ask_user: "Asking",
     };
 
     function summarizeArgs(name, args) {
         try {
+            if (name === "delegate") {
+                return args?.agent ? args.agent + ": " + (args.goal || "").slice(0, 60) : "(unknown)";
+            }
+            if (name === "ask_user") return args?.question ? args.question.slice(0, 60) : "(question)";
+            if (name === "pause_agent") return args?.reason ? args.reason.slice(0, 60) : "(pause)";
             if (FILE_TOOLS.has(name) && args && args.path) {
                 if (name === "apply_at_line") {
                     const r =
@@ -1046,6 +1098,7 @@
                 : result || "";
 
         if (EDIT_TOOLS.has(name) && !isError) {
+            trackPendingEdit(id);
             const act = el("div", "tool-actions", block);
             const viewBtn = el("button", "btn ghost small", act);
             viewBtn.textContent = "View diff";
@@ -1076,7 +1129,15 @@
         const block = toolBlocks.get(id);
         if (!block) return;
         block.classList.remove("error");
-        if (state === "applied") block.classList.add("applied");
+        removePendingEdit(id);
+        if (state === "applied") {
+            block.classList.add("applied");
+            lastAppliedEditId = id;
+            // extract path from block for undo bar
+            var metaEl = block.querySelector(".tmeta");
+            var filePath = metaEl ? metaEl.textContent : "";
+            showUndoBar(id, filePath);
+        }
         if (state === "rejected") block.classList.add("rejected");
         const actions = block.querySelector(".tool-actions");
         if (actions) {
@@ -1100,17 +1161,36 @@
 
     function send() {
         if (!signedIn) return;
-        const text = inp.value.trim();
-        if (!text || streaming) return;
-        addMsg("user", text);
+        var rawText = inp.value.trim();
+        if (!rawText || streaming) return;
+
+        // Build the final text with attached files context
+        var finalText = rawText;
+        if (attachedFiles.length) {
+            var ctx = "\n\n---\n**Attached files:**\n";
+            attachedFiles.forEach(function (af) {
+                if (af.isImage) {
+                    ctx += "\n[Image: " + af.name + "]\n";
+                } else {
+                    var snippet = (af.content || "").slice(0, 8000);
+                    ctx += "\n`" + (af.path || af.name) + "`:\n```\n" + snippet + "\n```\n";
+                }
+            });
+            finalText += ctx;
+            attachedFiles = [];
+            renderAttachedFiles();
+        }
+
+        addMsg("user", rawText);
         forceScrollToBottom(true);
         inp.value = "";
         autoSize();
         showStatusPill("Thinking…");
         toolBlocks.clear();
+        pendingEditIds = [];
         finalizeCurrent();
         setStreaming(true);
-        vscode.postMessage({ type: "send", text, mode });
+        vscode.postMessage({ type: "send", text: finalText, mode: mode });
     }
 
     function autoSize() {
@@ -1618,6 +1698,40 @@
                 showSettings(true);
                 vscode.postMessage({ type: "getSettings" });
                 break;
+            case "mentionResults":
+                if (mentionActive && Array.isArray(m.files)) {
+                    mentionItems = m.files.slice(0, 10);
+                    mentionIdx = 0;
+                    renderMentionPopup();
+                }
+                break;
+            case "fileContent":
+                if (typeof m.path === "string" && typeof m.content === "string") {
+                    // add as attached file if not already present
+                    var exists = attachedFiles.some(function(af) { return af.path === m.path; });
+                    if (!exists) {
+                        var name = m.path.split("/").pop() || m.path;
+                        attachedFiles.push({ name: name, path: m.path, content: m.content, isImage: false });
+                        renderAttachedFiles();
+                    }
+                }
+                break;
+            case "undoResult":
+                if (m.success) {
+                    var undoBar = logBody.querySelector('.undo-bar[data-id="' + m.id + '"]');
+                    if (undoBar) {
+                        undoBar.innerHTML = '<span class="small muted">✓ Undone</span>';
+                        setTimeout(function() { undoBar.remove(); }, 2000);
+                    }
+                    // reset the edit block state
+                    var block = toolBlocks.get(m.id);
+                    if (block) {
+                        block.classList.remove("applied");
+                        // re-add pending
+                        trackPendingEdit(m.id);
+                    }
+                }
+                break;
         }
     });
 
@@ -1792,6 +1906,246 @@
         chatsPanel.dataset.visible = visible ? "true" : "false";
         chatsPanel.style.display = visible ? "flex" : "none";
     }
+
+    // ========== Feature 1: Code block copy button (delegated) ==========
+    logBody.addEventListener("click", function (e) {
+        var btn = e.target.closest(".code-copy-btn");
+        if (!btn) return;
+        var wrap = btn.closest(".code-block-wrap");
+        var codeEl = wrap && wrap.querySelector("pre code");
+        var text = codeEl ? codeEl.textContent : (btn.dataset.code || "");
+        try {
+            navigator.clipboard.writeText(text);
+            btn.textContent = "Copied!";
+            btn.classList.add("copied");
+            setTimeout(function () {
+                btn.textContent = "Copy";
+                btn.classList.remove("copied");
+            }, 1500);
+        } catch (err) {}
+    });
+
+    // ========== Feature 2: @-mentions ==========
+    var mentionDebounce;
+    inp.addEventListener("input", function () {
+        autoSize();
+        checkMention();
+    });
+    inp.addEventListener("keydown", function (e) {
+        if (!mentionActive) return;
+        if (e.key === "ArrowDown") {
+            e.preventDefault();
+            mentionIdx = Math.min(mentionIdx + 1, mentionItems.length - 1);
+            renderMentionPopup();
+        } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            mentionIdx = Math.max(mentionIdx - 1, 0);
+            renderMentionPopup();
+        } else if (e.key === "Enter" && mentionItems.length) {
+            e.preventDefault();
+            acceptMention(mentionItems[mentionIdx]);
+        } else if (e.key === "Escape") {
+            closeMention();
+        }
+    });
+    function checkMention() {
+        var val = inp.value;
+        var cur = inp.selectionStart;
+        var lastAt = val.lastIndexOf("@", cur - 1);
+        if (lastAt === -1 || (lastAt > 0 && /\S/.test(val[lastAt - 1]))) {
+            closeMention();
+            return;
+        }
+        var query = val.slice(lastAt + 1, cur);
+        if (/\s/.test(query) && query.length > 20) {
+            closeMention();
+            return;
+        }
+        mentionStart = lastAt;
+        mentionActive = true;
+        clearTimeout(mentionDebounce);
+        mentionDebounce = setTimeout(function () {
+            vscode.postMessage({ type: "mentionSearch", query: query });
+        }, 150);
+    }
+    function closeMention() {
+        mentionActive = false;
+        mentionStart = -1;
+        mentionIdx = 0;
+        mentionItems = [];
+        if (mentionPopup) mentionPopup.classList.remove("visible");
+    }
+    function renderMentionPopup() {
+        if (!mentionPopup || !mentionItems.length) {
+            if (mentionPopup) mentionPopup.classList.remove("visible");
+            return;
+        }
+        mentionPopup.innerHTML = "";
+        mentionPopup.classList.add("visible");
+        mentionItems.forEach(function (file, i) {
+            var it = el("div", "mention-item" + (i === mentionIdx ? " active" : ""), mentionPopup);
+            it.innerHTML = '<span class="mention-icon">📄</span><span class="mention-path">' + escapeHtml(file) + '</span>';
+            it.addEventListener("mousedown", function (e) {
+                e.preventDefault();
+                acceptMention(file);
+            });
+        });
+    }
+    function acceptMention(file) {
+        var val = inp.value;
+        var cur = inp.selectionStart;
+        var before = val.slice(0, mentionStart);
+        var after = val.slice(cur);
+        inp.value = before + "@" + file + " " + after;
+        var newPos = before.length + 1 + file.length + 1;
+        inp.setSelectionRange(newPos, newPos);
+        closeMention();
+        // Request file content to attach
+        vscode.postMessage({ type: "readFileContent", path: file });
+        autoSize();
+    }
+
+    // ========== Feature 3: Drag & Drop files ==========
+    var composerWrapEl = $("composerWrap");
+    var dragCounter = 0;
+    if (composerWrapEl && dropOverlay) {
+        composerWrapEl.addEventListener("dragenter", function (e) {
+            e.preventDefault();
+            dragCounter++;
+            dropOverlay.classList.add("visible");
+        });
+        composerWrapEl.addEventListener("dragleave", function (e) {
+            e.preventDefault();
+            dragCounter--;
+            if (dragCounter <= 0) {
+                dragCounter = 0;
+                dropOverlay.classList.remove("visible");
+            }
+        });
+        composerWrapEl.addEventListener("dragover", function (e) {
+            e.preventDefault();
+        });
+        composerWrapEl.addEventListener("drop", function (e) {
+            e.preventDefault();
+            dragCounter = 0;
+            dropOverlay.classList.remove("visible");
+            var files = e.dataTransfer && e.dataTransfer.files;
+            if (!files || !files.length) return;
+            for (var i = 0; i < files.length; i++) {
+                var f = files[i];
+                addDroppedFile(f);
+            }
+        });
+    }
+    function addDroppedFile(f) {
+        var reader = new FileReader();
+        if (f.type && f.type.startsWith("image/")) {
+            reader.onload = function () {
+                var base64 = reader.result;
+                attachedFiles.push({ name: f.name, path: null, content: base64, isImage: true });
+                renderAttachedFiles();
+            };
+            reader.readAsDataURL(f);
+        } else {
+            reader.onload = function () {
+                attachedFiles.push({ name: f.name, path: null, content: reader.result, isImage: false });
+                renderAttachedFiles();
+            };
+            reader.readAsText(f);
+        }
+    }
+    function renderAttachedFiles() {
+        if (!attachedFilesEl) return;
+        attachedFilesEl.innerHTML = "";
+        attachedFiles.forEach(function (af, idx) {
+            var chip = el("div", "attached-file", attachedFilesEl);
+            var icon = af.isImage ? "🖼" : "📄";
+            chip.innerHTML = '<span>' + icon + '</span><span class="af-name">' + escapeHtml(af.name) + '</span>';
+            var removeBtn = el("button", "af-remove", chip);
+            removeBtn.textContent = "×";
+            removeBtn.addEventListener("click", function () {
+                attachedFiles.splice(idx, 1);
+                renderAttachedFiles();
+            });
+        });
+    }
+
+    // ========== Feature 4: Multi-file diff (Apply All / Reject All) ==========
+    function trackPendingEdit(id) {
+        if (!pendingEditIds.includes(id)) pendingEditIds.push(id);
+        updateMultiDiffBar();
+    }
+    function removePendingEdit(id) {
+        pendingEditIds = pendingEditIds.filter(function(x) { return x !== id; });
+        updateMultiDiffBar();
+    }
+    function updateMultiDiffBar() {
+        var existing = logBody.querySelector(".multi-diff-bar");
+        if (pendingEditIds.length < 2) {
+            if (existing) existing.remove();
+            return;
+        }
+        if (!existing) {
+            existing = el("div", "multi-diff-bar", logBody);
+        }
+        existing.innerHTML =
+            '<span class="mdb-label">' + pendingEditIds.length + ' pending edits</span>' +
+            '<div class="mdb-actions">' +
+            '<button class="btn primary small" id="applyAllBtn">Apply All</button>' +
+            '<button class="btn ghost small" id="rejectAllBtn">Reject All</button>' +
+            '</div>';
+        existing.querySelector("#applyAllBtn").addEventListener("click", function () {
+            vscode.postMessage({ type: "applyAllEdits", ids: pendingEditIds.slice() });
+            pendingEditIds = [];
+            updateMultiDiffBar();
+        });
+        existing.querySelector("#rejectAllBtn").addEventListener("click", function () {
+            vscode.postMessage({ type: "rejectAllEdits", ids: pendingEditIds.slice() });
+            pendingEditIds = [];
+            updateMultiDiffBar();
+        });
+    }
+
+    // ========== Feature 5: Undo last agent action ==========
+    function showUndoBar(id, path) {
+        var existing = logBody.querySelector(".undo-bar");
+        if (existing) existing.remove();
+        var bar = el("div", "undo-bar", logBody);
+        bar.dataset.id = id;
+        bar.innerHTML = '<span>Applied: ' + escapeHtml(path || "file") + '</span>';
+        var undoBtn = el("button", "undo-btn", bar);
+        undoBtn.textContent = "Undo";
+        undoBtn.addEventListener("click", function () {
+            undoBtn.disabled = true;
+            undoBtn.textContent = "Undoing…";
+            vscode.postMessage({ type: "undoLastEdit", id: id });
+        });
+        scrollToBottom();
+    }
+
+    // ========== Feature 6: Export chat ==========
+    if (exportBtn && exportMenu) {
+        exportBtn.addEventListener("click", function (e) {
+            e.stopPropagation();
+            exportMenu.classList.toggle("visible");
+        });
+        document.addEventListener("click", function () {
+            exportMenu.classList.remove("visible");
+        });
+        exportMenu.querySelectorAll(".export-menu-item").forEach(function (btn) {
+            btn.addEventListener("click", function (e) {
+                e.stopPropagation();
+                var format = btn.dataset.format;
+                vscode.postMessage({ type: "exportChat", format: format });
+                exportMenu.classList.remove("visible");
+            });
+        });
+    }
+
+    // ========== Override send to include attached files ==========
+    var _origSend = send;
+    // We need to modify the send function to include attachments
+    // Already handled below via message interception
 
     showSettings(false);
     showChatsPanel(false);
