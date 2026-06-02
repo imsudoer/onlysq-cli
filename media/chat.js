@@ -186,16 +186,27 @@
 
     function setMode(m) {
         mode = m;
-        var sw = $("modeSwitch");
-        if (sw) {
-            sw.setAttribute("data-active", m);
-            sw.querySelectorAll(".mode-opt").forEach(function(b) {
+        var bar = $("modeBar");
+        if (bar) {
+            bar.querySelectorAll(".mode-opt").forEach(function(b) {
                 b.classList.toggle("active", b.dataset.mode === m);
             });
+            // Position slider on the active button
+            positionSlider(bar, m);
         }
         document.body.classList.remove("mode-agent", "mode-chat", "mode-plan");
         document.body.classList.add("mode-" + m);
         try { localStorage.setItem("onlysq.mode", m); } catch(e) {}
+    }
+
+    function positionSlider(bar, m) {
+        var slider = $("modeSlider");
+        var btn = bar.querySelector('.mode-opt[data-mode="' + m + '"]');
+        if (!slider || !btn) return;
+        var colors = { agent: "var(--mode-agent)", chat: "var(--mode-chat)", plan: "var(--mode-plan)" };
+        slider.style.left = btn.offsetLeft + "px";
+        slider.style.width = btn.offsetWidth + "px";
+        slider.style.background = colors[m] || "var(--accent)";
     }
 
     function setModel(id, list) {
@@ -1488,19 +1499,25 @@
     }
 
     // Triple mode switch
-    var modeSwitchEl = $("modeSwitch");
-    if (modeSwitchEl) {
-        modeSwitchEl.querySelectorAll(".mode-opt").forEach(function(btn) {
+    var modeBarEl = $("modeBar");
+    if (modeBarEl) {
+        modeBarEl.querySelectorAll(".mode-opt").forEach(function(btn) {
             btn.addEventListener("click", function() {
                 setMode(btn.dataset.mode);
             });
         });
     }
+    // Initial position after layout settles
     try {
         var savedMode = localStorage.getItem("onlysq.mode");
         if (savedMode && ["agent","chat","plan"].indexOf(savedMode) >= 0) setMode(savedMode);
         else setMode("chat");
     } catch(e) { setMode("chat"); }
+    // Re-position slider on resize
+    window.addEventListener("resize", function() {
+        var b = $("modeBar");
+        if (b) positionSlider(b, mode);
+    });
 
     newBtn.addEventListener("click", () => {
         vscode.postMessage({ type: "newChat" });

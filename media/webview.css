@@ -84,38 +84,31 @@ body.mode-plan {
     --accent-line: rgba(88, 166, 255, 0.4);
 }
 
-/* ========== Triple mode switch ========== */
-.mode-switch {
+/* ========== Mode bar (modes + model in one row) ========== */
+.mode-bar {
     display: flex;
+    align-items: center;
     position: relative;
     background: rgba(127,127,127,0.1);
     border-radius: 6px;
     padding: 2px;
     gap: 0;
+    flex-wrap: wrap;
 }
 .mode-slider {
     position: absolute;
     top: 2px;
-    width: calc((100% - 4px) / 3);
+    left: 2px;
+    width: 28px;
     height: calc(100% - 4px);
     border-radius: 4px;
     background: var(--accent);
     opacity: 0.22;
-    transition: left 0.3s cubic-bezier(0.4,0,0.2,1), background 0.4s ease;
+    transition: left 0.28s cubic-bezier(0.4,0,0.2,1),
+                width 0.28s cubic-bezier(0.4,0,0.2,1),
+                background 0.4s ease;
     pointer-events: none;
     z-index: 0;
-}
-.mode-switch[data-active="agent"] .mode-slider {
-    left: 2px;
-    background: var(--mode-agent);
-}
-.mode-switch[data-active="chat"] .mode-slider {
-    left: calc(2px + (100% - 4px) / 3);
-    background: var(--mode-chat);
-}
-.mode-switch[data-active="plan"] .mode-slider {
-    left: calc(2px + 2 * (100% - 4px) / 3);
-    background: var(--mode-plan);
 }
 .mode-opt {
     position: relative;
@@ -123,16 +116,25 @@ body.mode-plan {
     background: transparent;
     border: none;
     color: var(--dim);
-    font-size: 10px;
-    font-weight: 600;
-    padding: 4px 8px;
+    width: 28px;
+    height: 24px;
     cursor: pointer;
     border-radius: 4px;
     transition: color 0.3s ease;
-    text-transform: uppercase;
-    letter-spacing: 0.4px;
-    flex: 1;
-    text-align: center;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    flex-shrink: 0;
+}
+.mode-opt svg {
+    width: 14px;
+    height: 14px;
+    stroke: currentColor;
+    fill: none;
+    stroke-width: 1.6;
+    stroke-linecap: round;
+    stroke-linejoin: round;
 }
 .mode-opt.active {
     color: var(--fg);
@@ -141,6 +143,44 @@ body.mode-agent .mode-opt[data-mode="agent"].active { color: var(--mode-agent); 
 body.mode-plan .mode-opt[data-mode="plan"].active { color: var(--mode-plan); }
 .mode-opt:hover {
     color: var(--muted);
+}
+/* Separator between modes and model */
+.mode-sep {
+    width: 1px;
+    height: 16px;
+    background: var(--border-soft);
+    margin: 0 2px;
+    flex-shrink: 0;
+}
+/* Model button inside mode-bar */
+.mode-model {
+    position: relative;
+    z-index: 1;
+    background: transparent;
+    border: none;
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 500;
+    padding: 3px 8px;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: color 0.2s ease, background 0.15s ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    max-width: 130px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--vscode-editor-font-family);
+}
+.mode-model:hover {
+    color: var(--fg);
+    background: rgba(127,127,127,0.1);
+}
+.mode-model .pcaret {
+    font-size: 7px;
+    opacity: 0.5;
 }
 
 .btn {
@@ -871,33 +911,30 @@ button.icon-btn.on {
     gap: 4px;
     flex-shrink: 0;
 }
+/* model-pill class kept for settings panel model pickers */
 .model-pill {
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    padding: 4px 10px;
-    background: rgba(127,127,127,0.1);
-    border: none;
-    border-radius: 6px;
+    padding: 2px 8px;
+    border: 1px solid var(--border-soft);
+    border-radius: 12px;
     font-size: 10px;
-    font-weight: 600;
     color: var(--muted);
     cursor: pointer;
     max-width: 160px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    transition: color var(--t) ease, background 0.15s ease;
-    text-transform: uppercase;
-    letter-spacing: 0.3px;
+    transition: border-color 0.15s, color 0.15s;
 }
 .model-pill:hover {
-    color: var(--fg);
-    background: rgba(127,127,127,0.16);
+    border-color: var(--accent);
+    color: var(--accent);
 }
 .model-pill .pcaret {
     font-size: 8px;
-    opacity: 0.5;
+    opacity: 0.7;
 }
 
 .send-btn,

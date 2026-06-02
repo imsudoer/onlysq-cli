@@ -76,15 +76,22 @@ const CHAT_BODY = `
     <textarea id="inp" rows="1" placeholder="Ask anything, or @ to mention a file…"></textarea>
     <div class="composer-toolbar">
       <div class="toolbar-left">
-        <div class="mode-switch" id="modeSwitch">
+        <div class="mode-bar" id="modeBar">
           <div class="mode-slider" id="modeSlider"></div>
-          <button class="mode-opt" data-mode="agent" title="Agent: reads & edits files">Agent</button>
-          <button class="mode-opt active" data-mode="chat" title="Chat: conversation only">Chat</button>
-          <button class="mode-opt" data-mode="plan" title="Plan: read-only analysis">Plan</button>
-        </div>
-        <div class="model-pill" id="modelPill" title="Select model">
-          <span id="modelLabel">Loading…</span>
-          <span class="pcaret">▾</span>
+          <button class="mode-opt" data-mode="agent" title="Agent">
+            <svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+          </button>
+          <button class="mode-opt active" data-mode="chat" title="Chat">
+            <svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+          </button>
+          <button class="mode-opt" data-mode="plan" title="Plan">
+            <svg viewBox="0 0 24 24"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><line x1="9" y1="12" x2="15" y2="12"/><line x1="9" y1="16" x2="13" y2="16"/></svg>
+          </button>
+          <div class="mode-sep"></div>
+          <button class="mode-model" id="modelPill" title="Select model">
+            <span id="modelLabel">Loading…</span>
+            <span class="pcaret">▾</span>
+          </button>
         </div>
       </div>
       <div class="toolbar-right">
