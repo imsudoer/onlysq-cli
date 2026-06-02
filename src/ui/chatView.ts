@@ -71,6 +71,7 @@ const CHAT_BODY = `
         </div>
       </div>
       <div class="toolbar-right">
+        <button class="pause-btn" id="pauseBtn" title="Pause after current step" style="display:none">Ⅱ</button>
         <button class="send-btn" id="sendBtn" title="Send (Enter)" disabled>↑</button>
         <button class="stop-btn" id="stopBtn" title="Stop" style="display:none">■</button>
       </div>
@@ -97,6 +98,10 @@ export class ChatView implements vscode.WebviewViewProvider {
     private windowStart = 0;
     private aborter?: AbortController;
     private subs: vscode.Disposable[] = [];
+    private isRunning = false;
+    private paused = false;
+    private pauseWaiter: (() => void) | null = null;
+    private askResolvers = new Map<string, (answer: string) => void>();
 
     constructor(
         private ctx: vscode.ExtensionContext,
@@ -298,7 +303,30 @@ export class ChatView implements vscode.WebviewViewProvider {
                 return this.handleSend(m.text, m.mode);
 
             case "cancel":
+                Logger.log("[chat] cancel requested");
+                this.resumeAgent();
+                for (const [, r] of this.askResolvers) r("(cancelled by user)");
+                this.askResolvers.clear();
                 this.aborter?.abort();
+                return;
+
+            case "answerUser":
+                if (typeof m.id === "string" && typeof m.answer === "string") {
+                    const r = this.askResolvers.get(m.id);
+                    if (r) {
+                        this.askResolvers.delete(m.id);
+                        r(m.answer);
+                    }
+                }
+                return;
+
+            case "togglePause":
+                if (this.paused) this.resumeAgent();
+                else this.setPaused(true, "Paused by user");
+                return;
+
+            case "resume":
+                this.resumeAgent();
                 return;
 
             case "newChat":
@@ -357,6 +385,10 @@ export class ChatView implements vscode.WebviewViewProvider {
             case "loadMore":
                 return this.loadMore();
             case "trimToWindow":
+                if (this.isRunning) {
+                    Logger.log("[chat] trimToWindow ignored while running");
+                    return;
+                }
                 return this.trimToWindow();
 
             case "selectModel":
@@ -465,7 +497,15 @@ export class ChatView implements vscode.WebviewViewProvider {
         mode: "chat" | "agent"
     ): Promise<void> {
         await this.ensureActiveChat();
+
+        if (this.isRunning) {
+            this.aborter?.abort();
+        }
+
+        this.setPaused(false);
+        this.isRunning = true;
         this.aborter?.abort();
+
         const aborter = new AbortController();
         this.aborter = aborter;
 
@@ -475,6 +515,11 @@ export class ChatView implements vscode.WebviewViewProvider {
         } catch (e: any) {
             Logger.error("[chat] send", e);
             this.post({ type: "error", message: String(e?.message ?? e) });
+        } finally {
+            if (this.aborter === aborter) {
+                this.isRunning = false;
+                this.setPaused(false);
+            }
         }
     }
 
@@ -554,6 +599,22 @@ export class ChatView implements vscode.WebviewViewProvider {
                             result: e.result,
                         });
                         break;
+                    case "ask-user":
+                        this.post({
+                            type: "ask-user",
+                            id: e.id,
+                            question: e.question,
+                            options: e.options,
+                            multiSelect: e.multiSelect,
+                        });
+                        break;
+                    case "pause":
+                        this.post({
+                            type: "pauseState",
+                            paused: true,
+                            reason: e.reason ?? null,
+                        });
+                        break;
                     case "done":
                         this.post({ type: "done", reason: e.reason });
                         break;
@@ -563,7 +624,12 @@ export class ChatView implements vscode.WebviewViewProvider {
                 }
             },
             signal,
-            cleanHistory
+            cleanHistory,
+            {
+                shouldPause: () => this.paused,
+                waitIfPaused: (reason?: string) => this.waitIfPaused(reason),
+                askUser: (callId: string) => this.askUser(callId),
+            }
         );
         if (this.activeChat) this.activeChat.messages = updated;
         this.updateHistoryAfterTurn();
@@ -609,6 +675,37 @@ export class ChatView implements vscode.WebviewViewProvider {
             messages: serializeMessages(slice),
         });
         this.notifyCanLoadMore();
+    }
+
+    private setPaused(value: boolean, reason?: string): void {
+        this.paused = value;
+        this.view?.webview.postMessage({
+            type: "pauseState",
+            paused: value,
+            reason: reason ?? null,
+        });
+    }
+
+    private async waitIfPaused(reason?: string): Promise<void> {
+        if (!this.paused) return;
+        this.setPaused(true, reason);
+        await new Promise<void>((resolve) => {
+            this.pauseWaiter = resolve;
+        });
+        this.pauseWaiter = null;
+    }
+
+    private resumeAgent(): void {
+        this.setPaused(false);
+        const r = this.pauseWaiter;
+        this.pauseWaiter = null;
+        r?.();
+    }
+
+    private askUser(callId: string): Promise<string> {
+        return new Promise((resolve) => {
+            this.askResolvers.set(callId, resolve);
+        });
     }
 
     private post(msg: any): void {

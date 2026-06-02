@@ -10,8 +10,16 @@ export type AgentEvent =
     | { type: "token"; text: string }
     | { type: "tool-call"; id: string; name: string; args: any }
     | { type: "tool-result"; id: string; name: string; result: string }
+    | { type: "ask-user"; id: string; question: string; options?: string[]; multiSelect: boolean }
+    | { type: "pause"; reason?: string }
     | { type: "done"; reason?: string }
     | { type: "error"; message: string };
+
+export interface AgentControl {
+    shouldPause: () => boolean;
+    waitIfPaused: (reason?: string) => Promise<void>;
+    askUser?: (callId: string) => Promise<string>;
+}
 
 const SYSTEM_BASE = `You are OnlySq CLI, an autonomous coding agent operating inside VS Code.
     You have access to the user's workspace through tools. Workflow:
@@ -33,7 +41,9 @@ const SYSTEM_BASE = `You are OnlySq CLI, an autonomous coding agent operating in
     6. After making one edit, the file content has shifted. Re-read before any further apply_at_line on the same file.
     7. You may request multiple read-only tools in one step — they run in parallel.
     8. Stop and summarize when the goal is complete.
-    9. Do not redact technical identifiers (usernames, IPs, emails). Preserve verbatim.
+    9. If you need the user to review before continuing, call pause_agent with a clear reason.
+    10. If you need clarification, confirmation, or a choice from the user, call ask_user. Provide options when applicable.
+    11. Do not redact technical identifiers (usernames, IPs, emails). Preserve verbatim.
     
     Shell commands:
     - run_command — captures stdout/stderr.
@@ -48,7 +58,8 @@ export async function runAgent(
     goal: string,
     onEvent: (e: AgentEvent) => void,
     signal?: AbortSignal,
-    history: ChatMessage[] = []
+    history: ChatMessage[] = [],
+    control?: AgentControl,
 ): Promise<ChatMessage[]> {
     const cfg = settings();
     const cache = new ToolCache(cfg.toolCache);
@@ -67,6 +78,12 @@ export async function runAgent(
     );
 
     for (let step = 0; step < cfg.maxAgentSteps; step++) {
+        if (control?.shouldPause()) {
+            Logger.log("[agent] pause before next step");
+            onEvent({ type: "pause", reason: "Paused before next step" });
+            await control.waitIfPaused("Paused before next step");
+        }
+
         if (signal?.aborted) {
             Logger.log("[agent] aborted by signal");
             onEvent({ type: "done", reason: "cancelled" });
@@ -186,6 +203,19 @@ export async function runAgent(
                 result = `Error: ${e?.message ?? e}`;
                 Logger.error(`[agent] tool ${tc.function.name} threw`, e);
             }
+
+            if (result === "__ASK_USER__" && tc.function.name === "ask_user" && control?.askUser) {
+                onEvent({
+                    type: "ask-user",
+                    id: tc.id,
+                    question: String(args.question ?? ""),
+                    options: Array.isArray(args.options) ? args.options.map(String) : undefined,
+                    multiSelect: !!args.multi_select,
+                });
+                result = await control.askUser(tc.id);
+                Logger.log(`[agent] ask_user answer: ${result.slice(0, 200)}`);
+            }
+
             Logger.log(
                 `[agent] <- ${tc.function.name} result (${
                     result.length
@@ -211,6 +241,21 @@ export async function runAgent(
                 tool_call_id: r.id,
                 content: r.result.slice(0, 60_000),
             });
+        }
+
+        const pauseRequested = results.some((r) => r.name === "pause_agent");
+        if (pauseRequested || control?.shouldPause()) {
+            const reason = pauseRequested
+                ? results.find((r) => r.name === "pause_agent")?.result
+                : "Paused before next step";
+            Logger.log("[agent] pause after tools", reason);
+            onEvent({ type: "pause", reason });
+            await control?.waitIfPaused(reason);
+        }
+
+        if (signal?.aborted) {
+            onEvent({ type: "done", reason: "cancelled" });
+            return messages;
         }
     }
 

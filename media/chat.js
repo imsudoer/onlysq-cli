@@ -55,6 +55,7 @@
     const chatsNewBtn = $("chatsNewBtn");
     const chatTitleEl = $("chatTitle");
     const HISTORY_WINDOW = 30;
+    const pauseBtn = $("pauseBtn");
     const settingsBtn = $("settingsBtn");
     const settingsPanel = $("settingsPanel");
     const settingsClose = $("settingsClose");
@@ -73,6 +74,7 @@
     let chatsQuery = "";
     let canLoadMore = false;
     let isLoadingMore = false;
+    let paused = false;
     let stickToBottom = true;
     let scrollBtn = null;
     let userScrolling = false;
@@ -115,9 +117,12 @@
         if (b) {
             sendBtn.style.display = "none";
             stopBtn.style.display = "";
+            if (pauseBtn) pauseBtn.style.display = mode === "agent" ? "" : "none";
         } else {
             sendBtn.style.display = "";
             stopBtn.style.display = "none";
+            if (pauseBtn) pauseBtn.style.display = "none";
+            setPaused(false);
         }
         updateSendActive();
     }
@@ -816,6 +821,89 @@
         scrollToBottom();
     }
 
+    function renderAskUser(id, question, options, multiSelect) {
+        const wrap = el("div", "ask-user-block", logBody);
+        wrap.dataset.id = id;
+
+        const q = el("div", "ask-question", wrap);
+        q.innerHTML = renderMarkdown(question);
+
+        if (options && options.length) {
+            const form = el("div", "ask-options", wrap);
+            const type = multiSelect ? "checkbox" : "radio";
+            const selected = new Set();
+
+            options.forEach(function (opt) {
+                const label = el("label", "ask-option", form);
+                const cb = document.createElement("input");
+                cb.type = type;
+                cb.name = "ask-" + id;
+                cb.value = opt;
+                label.appendChild(cb);
+                const span = el("span", "", label);
+                span.textContent = opt;
+                cb.addEventListener("change", function () {
+                    if (multiSelect) {
+                        if (cb.checked) selected.add(opt);
+                        else selected.delete(opt);
+                    } else {
+                        selected.clear();
+                        selected.add(opt);
+                    }
+                    submitBtn.disabled = selected.size === 0;
+                });
+            });
+
+            const actions = el("div", "ask-actions", wrap);
+            var submitBtn = el("button", "btn primary small", actions);
+            submitBtn.textContent = "Reply";
+            submitBtn.disabled = true;
+            submitBtn.addEventListener("click", function () {
+                var answer = Array.from(selected).join(", ");
+                submitAnswer(id, answer, wrap);
+            });
+        } else {
+            var inputWrap = el("div", "ask-input-wrap", wrap);
+            var ta = document.createElement("textarea");
+            ta.className = "ask-input";
+            ta.rows = 2;
+            ta.placeholder = "Type your answer\u2026";
+            inputWrap.appendChild(ta);
+
+            var actions2 = el("div", "ask-actions", wrap);
+            var submitBtn2 = el("button", "btn primary small", actions2);
+            submitBtn2.textContent = "Reply";
+            submitBtn2.disabled = true;
+            ta.addEventListener("input", function () {
+                submitBtn2.disabled = !ta.value.trim();
+            });
+            ta.addEventListener("keydown", function (e) {
+                if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                    e.preventDefault();
+                    if (ta.value.trim()) submitAnswer(id, ta.value.trim(), wrap);
+                }
+            });
+            submitBtn2.addEventListener("click", function () {
+                if (ta.value.trim()) submitAnswer(id, ta.value.trim(), wrap);
+            });
+
+            setTimeout(function () { ta.focus(); }, 20);
+        }
+
+        scrollToBottom();
+    }
+
+    function submitAnswer(id, answer, wrap) {
+        vscode.postMessage({ type: "answerUser", id: id, answer: answer });
+        wrap.innerHTML = "";
+        wrap.className = "ask-user-answered";
+        var badge = el("div", "ask-answered-badge", wrap);
+        badge.innerHTML =
+            '<span class="ask-check">\u2713</span> <span>Answered: ' +
+            escapeHtml(answer) +
+            "</span>";
+    }
+
     const FILE_TOOLS = new Set([
         "read_file",
         "write_file",
@@ -1102,6 +1190,27 @@
     stopBtn.addEventListener("click", () =>
         vscode.postMessage({ type: "cancel" })
     );
+
+    function setPaused(value, reason) {
+        paused = !!value;
+        if (pauseBtn) {
+            pauseBtn.classList.toggle("on", paused);
+            pauseBtn.title = paused ? "Resume agent" : "Pause after current step";
+            pauseBtn.textContent = paused ? "\u25B6" : "\u2161";
+        }
+        if (paused) {
+            showStatusPill(reason || "Paused. Press Resume to continue.");
+        } else {
+            if (statusPill) clearStatusPill();
+        }
+    }
+
+    if (pauseBtn) {
+        pauseBtn.addEventListener("click", () => {
+            vscode.postMessage({ type: "togglePause" });
+        });
+    }
+
     agentBtn.addEventListener("click", () =>
         setMode(mode === "agent" ? "chat" : "agent")
     );
@@ -1370,15 +1479,7 @@
             updateScrollBtn();
         }
 
-        if (atBottom) {
-            clearTimeout(scrollTrimDebounce);
-            scrollTrimDebounce = setTimeout(() => {
-                const totalMsgs = logBody.querySelectorAll(".msg").length;
-                if (totalMsgs > HISTORY_WINDOW) {
-                    vscode.postMessage({ type: "trimToWindow" });
-                }
-            }, 600);
-        }
+        clearTimeout(scrollTrimDebounce);
     });
 
     window.addEventListener("message", (e) => {
@@ -1468,6 +1569,7 @@
                 loadMoreBtn.textContent = "Load previous messages";
                 break;
             case "trimTo":
+                if (streaming) break;
                 {
                     const msgs = Array.from(logBody.querySelectorAll(".msg"));
                     const drop = msgs.length - m.keep;
@@ -1502,6 +1604,13 @@
                 if (chatsPanel.style.display !== "none") renderChatsList();
                 break;
 
+            case "ask-user":
+                clearStatusPill();
+                renderAskUser(m.id, m.question, m.options, m.multiSelect);
+                break;
+            case "pauseState":
+                setPaused(!!m.paused, m.reason);
+                break;
             case "settings":
                 renderSettings(m);
                 break;

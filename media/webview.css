@@ -330,7 +330,7 @@ button.icon-btn.on {
     height: 7px;
     border-radius: 50%;
     background: var(--accent);
-    animation: pulse 1.2s ease-in-out infinite;
+    animation: dotPulse 1.4s ease-in-out infinite;
     flex-shrink: 0;
 }
 .tool-head .tcheck {
@@ -423,20 +423,43 @@ button.icon-btn.on {
 .status-pill {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     font-size: 11px;
     color: var(--muted);
-    padding: 4px 8px;
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    margin: 4px 0;
+    padding: 5px 10px;
+    border: 1px solid var(--border-soft);
+    border-radius: 16px;
+    margin: 6px 0;
+    animation: pillIn 0.2s ease-out;
 }
 .status-pill .sdot {
     width: 6px;
     height: 6px;
     border-radius: 50%;
     background: var(--accent);
-    animation: pulse 1.2s ease-in-out infinite;
+    position: relative;
+    animation: dotPulse 1.4s ease-in-out infinite;
+    animation-delay: 0s;
+}
+.status-pill .sdot::before,
+.status-pill .sdot::after {
+    content: "";
+    position: absolute;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+    top: 0;
+}
+.status-pill .sdot::before {
+    left: -10px;
+    animation: dotPulse 1.4s ease-in-out infinite;
+    animation-delay: -0.3s;
+}
+.status-pill .sdot::after {
+    left: 10px;
+    animation: dotPulse 1.4s ease-in-out infinite;
+    animation-delay: 0.3s;
 }
 
 .err {
@@ -609,27 +632,47 @@ button.icon-btn.on {
     border-color: var(--border-soft);
 }
 
-.cursor::after {
-    content: "▍";
+.pause-btn {
+    width: 26px;
+    height: 26px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--muted);
+    border-radius: 4px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+.pause-btn:hover {
+    border-color: var(--accent);
     color: var(--accent);
-    animation: blink 1s steps(2) infinite;
-    margin-left: 1px;
 }
-@keyframes blink {
-    50% {
-        opacity: 0;
-    }
+.pause-btn.on {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-soft);
 }
-@keyframes pulse {
-    0%,
-    100% {
-        opacity: 0.4;
-        transform: scale(0.85);
-    }
-    50% {
-        opacity: 1;
-        transform: scale(1);
-    }
+
+.cursor::after {
+    content: "";
+    display: inline-block;
+    width: 2px;
+    height: 1em;
+    background: var(--accent);
+    margin-left: 2px;
+    vertical-align: text-bottom;
+    animation: cursorBlink 0.8s steps(2) infinite;
+}
+@keyframes cursorBlink {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0; }
+}
+@keyframes dotPulse {
+    0%, 80%, 100% { opacity: 0.25; transform: scale(0.8); }
+    40% { opacity: 1; transform: scale(1); }
 }
 
 .modal-backdrop {
@@ -1245,9 +1288,6 @@ button.icon-btn.on {
     }
 }
 
-.status-pill {
-    animation: pillIn 0.15s ease-out;
-}
 @keyframes pillIn {
     from {
         opacity: 0;
@@ -1269,6 +1309,125 @@ button.icon-btn.on {
         opacity: 1;
         transform: translateY(0);
     }
+}
+
+/* ========== Ask User ========== */
+
+.ask-user-block {
+    margin: 12px 0;
+    padding: 12px 14px;
+    border: 1px solid var(--accent-line);
+    border-left: 3px solid var(--accent);
+    border-radius: 4px;
+    background: var(--accent-soft);
+    animation: askIn 0.25s ease-out;
+}
+@keyframes askIn {
+    from { opacity: 0; transform: translateY(4px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+.ask-question {
+    font-size: 13px;
+    line-height: 1.55;
+    color: var(--fg);
+    margin-bottom: 10px;
+}
+.ask-question p { margin: 0 0 4px; }
+.ask-options {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 10px;
+}
+.ask-option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+    transition: border-color 0.15s, background 0.15s;
+}
+.ask-option:hover {
+    border-color: var(--accent);
+    background: rgba(253, 107, 3, 0.06);
+}
+.ask-option input {
+    accent-color: var(--accent);
+    margin: 0;
+}
+.ask-option input:checked + span {
+    color: var(--accent);
+    font-weight: 500;
+}
+.ask-input-wrap {
+    margin-bottom: 10px;
+}
+.ask-input {
+    width: 100%;
+    background: var(--input-bg);
+    color: var(--input-fg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 7px 9px;
+    font-family: inherit;
+    font-size: 13px;
+    line-height: 1.4;
+    resize: vertical;
+    outline: none;
+    min-height: 36px;
+}
+.ask-input:focus { border-color: var(--accent); }
+.ask-actions {
+    display: flex;
+    gap: 6px;
+}
+.ask-user-answered {
+    margin: 8px 0;
+    padding: 6px 10px;
+    animation: fadeIn 0.2s ease-out;
+}
+.ask-answered-badge {
+    font-size: 12px;
+    color: var(--muted);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+.ask-check {
+    color: var(--ok);
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+
+/* ========== Streaming chunk animations ========== */
+
+.msg .body {
+    white-space: pre-wrap;
+    animation: bodyIn 0.15s ease-out;
+}
+@keyframes bodyIn {
+    from { opacity: 0; transform: translateY(2px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+.msg .body p,
+.msg .body pre,
+.msg .body ul,
+.msg .body ol,
+.msg .body blockquote,
+.msg .body h1, .msg .body h2, .msg .body h3,
+.msg .body h4, .msg .body h5, .msg .body h6 {
+    animation: chunkIn 0.2s ease-out both;
+}
+@keyframes chunkIn {
+    from { opacity: 0; transform: translateY(3px); }
+    to   { opacity: 1; transform: translateY(0); }
 }
 
 .confirm-modal {

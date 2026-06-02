@@ -80,6 +80,62 @@ export const builtinTools: ToolHandler[] = [
         def: {
             type: "function",
             function: {
+                name: "pause_agent",
+                description:
+                    "Pause the agent after the current step and wait for the user to resume. " +
+                    "Use when user review, manual action, or confirmation is needed before continuing.",
+                parameters: obj(
+                    {
+                        reason: str(
+                            "Why you are pausing and what the user should check or do"
+                        ),
+                    },
+                    ["reason"]
+                ),
+            },
+        },
+        run: async ({ reason }: { reason: string }) => {
+            return String(reason || "Paused by model");
+        },
+    },
+
+    {
+        def: {
+            type: "function",
+            function: {
+                name: "ask_user",
+                description:
+                    "Ask the user a question and wait for their answer. Use when you need clarification, confirmation, or a choice. " +
+                    "For yes/no or multiple-choice, provide options array. For free-form input, omit options. " +
+                    "The agent will pause until the user responds.",
+                parameters: obj(
+                    {
+                        question: str("The question to ask"),
+                        options: {
+                            type: "array",
+                            items: str(""),
+                            description:
+                                "Optional list of choices. If provided, user picks one or more. If omitted, user types free-form.",
+                        },
+                        multi_select: {
+                            type: "boolean",
+                            description:
+                                "Allow selecting multiple options. Default false.",
+                        },
+                    },
+                    ["question"]
+                ),
+            },
+        },
+        run: async (_args: any, _ctx) => {
+            return "__ASK_USER__";
+        },
+    },
+
+    {
+        def: {
+            type: "function",
+            function: {
                 name: "read_file",
                 description:
                     'Read a UTF-8 file with line numbers (1-based). Lines are formatted as "  42 | source code". ' +
