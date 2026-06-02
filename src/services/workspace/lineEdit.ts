@@ -25,6 +25,30 @@ export class LineEditValidationError extends Error {
     }
 }
 
+interface NormalizedFile {
+    lines: string[];
+    eol: "\r\n" | "\n";
+    trailingNewline: boolean;
+}
+
+function normalize(raw: string): NormalizedFile {
+    const eol: "\r\n" | "\n" = raw.includes("\r\n") ? "\r\n" : "\n";
+    const stripped = raw.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    const trailingNewline = stripped.endsWith("\n");
+    const body = trailingNewline ? stripped.slice(0, -1) : stripped;
+    return { lines: body.split("\n"), eol, trailingNewline };
+}
+
+function rejoin(file: NormalizedFile, lines: string[]): string {
+    let joined = lines.join(file.eol);
+    if (file.trailingNewline) joined += file.eol;
+    return joined;
+}
+
+function stripLineNumberPrefix(s: string): string {
+    return s.replace(/^\s*\d+\s*\|\s?/, "").replace(/\r$/, "");
+}
+
 export async function previewLineEdit(
     edit: LineEdit
 ): Promise<LineEditPreview> {
@@ -37,7 +61,8 @@ export async function previewLineEdit(
         }
     }
     const original = ex ? await readText(edit.path) : "";
-    const lines = original.split("\n");
+    const file = normalize(original);
+    const lines = file.lines;
     const totalLines = lines.length;
 
     const start = edit.startLine - 1;
@@ -64,13 +89,12 @@ export async function previewLineEdit(
     }
 
     if (edit.expectedLines && edit.expectedLines.length) {
-        const stripPrefix = (s: string) => s.replace(/^\s*\d+\s*\|\s?/, "");
-        const expectedClean = edit.expectedLines.map(stripPrefix);
-        const actual = lines.slice(start, start + expectedClean.length);
-        if (
-            actual.length !== expectedClean.length ||
-            actual.some((l, i) => l !== expectedClean[i])
-        ) {
+        const expected = edit.expectedLines.map(stripLineNumberPrefix);
+        const actual = lines.slice(start, start + expected.length);
+        const matches =
+            actual.length === expected.length &&
+            actual.every((l, i) => l === expected[i]);
+        if (!matches) {
             throw new LineEditValidationError(
                 `expected_lines mismatch at ${edit.path}:${edit.startLine}. ` +
                     `Actual lines at this position:\n` +
@@ -82,7 +106,11 @@ export async function previewLineEdit(
         }
     }
 
-    const repl = edit.replacement.split("\n");
+    const repl = edit.replacement
+        .replace(/\r\n/g, "\n")
+        .replace(/\r/g, "\n")
+        .split("\n");
+
     let next: string[];
     if (edit.mode === "replace") {
         next = [...lines.slice(0, start), ...repl, ...lines.slice(endIdx + 1)];
@@ -103,7 +131,7 @@ export async function previewLineEdit(
 
     return {
         path: edit.path,
-        proposed: next.join("\n"),
+        proposed: rejoin(file, next),
         exists: ex,
         originalRange,
         totalLines,

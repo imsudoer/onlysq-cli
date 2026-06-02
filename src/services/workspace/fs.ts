@@ -203,14 +203,18 @@ export async function readTextWithLineNumbers(
     truncated: boolean;
     rangeStart: number;
     rangeEnd: number;
+    eol: string;
 }> {
     const data = await vscode.workspace.fs.readFile(resolve(rel));
     const maxBytes = opts.maxBytes ?? 200_000;
     const truncated = data.length > maxBytes;
-    const text = new TextDecoder().decode(
+    const raw = new TextDecoder().decode(
         truncated ? data.slice(0, maxBytes) : data
     );
-    const allLines = text.split("\n");
+
+    const eol = raw.includes("\r\n") ? "CRLF" : "LF";
+    const normalized = raw.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    const allLines = normalized.split("\n");
     const totalLines = allLines.length;
 
     const start = Math.max(1, opts.start ?? 1);
@@ -231,5 +235,6 @@ export async function readTextWithLineNumbers(
         truncated,
         rangeStart: start,
         rangeEnd: end,
+        eol,
     };
 }
