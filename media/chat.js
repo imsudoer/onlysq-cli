@@ -92,6 +92,7 @@
     let attachedFiles = []; // {name, path, content}
     let pendingEditIds = []; // for multi-diff
     let lastAppliedEditId = null; // for undo
+    let activeEditFinish = null; // callback for active msg edit
 
     let savedHeight =
         parseInt(localStorage.getItem("onlysq.composerH") || "0", 10) || 0;
@@ -568,25 +569,11 @@
             ta.setSelectionRange(ta.value.length, ta.value.length);
         }, 20);
 
-        function finish(commit) {
-            const next = ta.value;
-            msgEl.classList.remove("editing");
-            if (commit && next.trim()) {
-                const idx = visibleIndexOf(msgEl);
-                vscode.postMessage({
-                    type: "editMessage",
-                    index: idx,
-                    text: next,
-                    mode,
-                });
-            } else {
-                body.innerHTML = renderMarkdown(raw);
-            }
-        }
+        activeEditFinish = finish;
         save.addEventListener("click", () => finish(true));
         cancel.addEventListener("click", () => finish(false));
         ta.addEventListener("keydown", (e) => {
-            if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+            if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
                 finish(true);
             }
@@ -595,6 +582,22 @@
                 finish(false);
             }
         });
+        function finish(commit) {
+            activeEditFinish = null;
+            var next = ta.value;
+            msgEl.classList.remove("editing");
+            if (commit && next.trim()) {
+                var idx = visibleIndexOf(msgEl);
+                vscode.postMessage({
+                    type: "editMessage",
+                    index: idx,
+                    text: next,
+                    mode: mode,
+                });
+            } else {
+                body.innerHTML = renderMarkdown(raw);
+            }
+        }
     }
 
     function renderHistoryMessages(messages, prepend) {
@@ -1208,25 +1211,68 @@
         return block;
     }
 
+    var TASK_TOOLS = {create_task: true, update_task: true, delete_task: true, list_agent_tasks: true};
+
+    function renderTaskWidget(name, args, result) {
+        var dotClass = "created";
+        var icon = "+";
+        var label = "";
+        if (name === "create_task") {
+            dotClass = "created";
+            icon = "+";
+            label = "Created task: <strong>" + escapeHtml((args && args.text) || result || "").slice(0, 60) + "</strong>";
+        } else if (name === "update_task") {
+            var st = args && args.status;
+            if (st === "done") { dotClass = "completed"; icon = "\u2713"; }
+            else if (st === "in_progress") { dotClass = "updated"; icon = "\u25B6"; }
+            else { dotClass = "updated"; icon = "\u2022"; }
+            label = "Updated <strong>" + escapeHtml((args && args.id) || "") + "</strong> \u2192 " + escapeHtml(st || "");
+        } else if (name === "delete_task") {
+            dotClass = "deleted";
+            icon = "\u2717";
+            label = "Removed task: <strong>" + escapeHtml((args && args.id) || "") + "</strong>";
+        } else {
+            return null; // list_agent_tasks — use standard block
+        }
+        var w = document.createElement("div");
+        w.className = "task-activity";
+        w.innerHTML = '<div class="task-dot ' + dotClass + '">' + icon + '</div>' +
+            '<div class="task-line"></div>' +
+            '<div class="task-label">' + label + '</div>';
+        return w;
+    }
+
     function setToolResult(id, name, args, result) {
-        const block = toolBlocks.get(id);
+        var block = toolBlocks.get(id);
         if (!block) return;
-        const isError = /^Error:/i.test(result || "");
-        const spinner = block.querySelector(".tspinner");
+        var isError = /^Error:/i.test(result || "");
+
+        // Task tools: replace standard block with activity widget
+        if (TASK_TOOLS[name] && !isError && name !== "list_agent_tasks") {
+            var widget = renderTaskWidget(name, args, result);
+            if (widget) {
+                block.parentNode.insertBefore(widget, block);
+                block.style.display = "none";
+                scrollToBottom();
+                return;
+            }
+        }
+
+        var spinner = block.querySelector(".tspinner");
         if (spinner) {
             spinner.outerHTML = isError
-                ? '<span class="txmark">✗</span>'
-                : '<span class="tcheck">✓</span>';
+                ? '<span class="txmark">\u2717</span>'
+                : '<span class="tcheck">\u2713</span>';
         }
         if (isError) block.classList.add("error");
 
-        const body = block.querySelector(".tool-body");
-        const r = el("div", "", body);
+        var body = block.querySelector(".tool-body");
+        var r = el("div", "", body);
         r.innerHTML =
             '<div class="tlabel">Result</div><div class="tresult"></div>';
         r.querySelector(".tresult").textContent =
             result && result.length > 4000
-                ? result.slice(0, 4000) + "\n…(truncated)"
+                ? result.slice(0, 4000) + "\n\u2026(truncated)"
                 : result || "";
 
         if (EDIT_TOOLS.has(name) && !isError) {
@@ -1292,6 +1338,11 @@
 
     function send() {
         if (!signedIn) return;
+        // If editing a message, submit the edit
+        if (activeEditFinish) {
+            activeEditFinish(true);
+            return;
+        }
         var rawText = inp.value.trim();
         if (!rawText) return;
 
@@ -1761,9 +1812,17 @@
                         currentAcc = "";
                     }
                     var ghost = addToolBlock(m.id, m.name, {});
-                    if (ghost) ghost.classList.add("streaming-tool");
+                    if (ghost) {
+                        ghost.classList.add("streaming-tool");
+                        // Replace spinner with streaming dots
+                        var spinner = ghost.querySelector(".tspinner");
+                        if (spinner) {
+                            spinner.innerHTML = '<span></span><span></span><span></span>';
+                            spinner.className = 'streaming-dots';
+                        }
+                    }
                 }
-                // Update partial args display
+                // Update partial args + meta in real time
                 var partial = toolBlocks.get(m.id);
                 if (partial && partial.classList.contains("streaming-tool")) {
                     var metaP = partial.querySelector(".tmeta");
@@ -1771,22 +1830,36 @@
                         try {
                             var pArgs = JSON.parse(m.argsPartial || "{}");
                             metaP.textContent = summarizeArgs(m.name, pArgs);
-                        } catch(e) { /* partial JSON */ }
+                        } catch(e) { /* partial JSON, try to show raw */ }
+                    }
+                    // Live update body args preview
+                    var bodyP = partial.querySelector(".targs");
+                    if (bodyP && m.argsPartial && m.argsPartial.length > 2) {
+                        try {
+                            bodyP.innerHTML = highlightCode(JSON.stringify(JSON.parse(m.argsPartial), null, 2));
+                        } catch(e) {
+                            bodyP.textContent = m.argsPartial;
+                        }
                     }
                 }
+                scrollToBottom();
                 break;
             case "tool-call":
                 // Finalize: remove ghost state if it existed
                 var existingGhost = toolBlocks.get(m.id);
                 if (existingGhost && existingGhost.classList.contains("streaming-tool")) {
                     existingGhost.classList.remove("streaming-tool");
-                    existingGhost.style.opacity = "";
-                    existingGhost.style.pointerEvents = "";
+                    // Restore spinner
+                    var dots = existingGhost.querySelector(".streaming-dots");
+                    if (dots) dots.outerHTML = '<span class="tspinner"></span>';
                     // Update with real args
                     var metaR = existingGhost.querySelector(".tmeta");
                     if (metaR) metaR.textContent = summarizeArgs(m.name, m.args);
                     var nameR = existingGhost.querySelector(".tname");
                     if (nameR) nameR.textContent = m.name;
+                    // Update body args
+                    var bodyR = existingGhost.querySelector(".targs");
+                    if (bodyR) bodyR.innerHTML = highlightCode(JSON.stringify(m.args, null, 2));
                 } else {
                     if (currentBody) {
                         currentBody.classList.remove("cursor");

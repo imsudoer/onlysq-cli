@@ -30,6 +30,9 @@
     --c-fn: #dcdcaa;
     --c-type: #4ec9b0;
     --c-punct: #d4d4d4;
+
+    /* Smooth transition duration */
+    --t: 0.4s;
 }
 
 * {
@@ -57,8 +60,13 @@ button {
 }
 
 /* ========== Mode-based accent transition ========== */
-body {
-    transition: --accent 0.35s ease;
+/* Smooth color transitions on all accent-dependent elements */
+.msg.user, .msg.user .role, .send-btn, .pause-btn, .composer.focused,
+.tool-head .tname, .tool-head .tspinner, .status-dots span,
+.suggestions button, .btn, .btn.primary,
+.auth-logo .dot, .empty .empty-logo .dot, .header .logo .dot,
+.cursor::after, .drop-overlay-inner, .model-pill {
+    transition: all var(--t) ease;
 }
 body.mode-agent {
     --accent: #fd6b03;
@@ -88,13 +96,12 @@ body.mode-plan {
 .mode-slider {
     position: absolute;
     top: 2px;
-    left: 2px;
-    width: calc(33.333% - 1px);
+    width: calc((100% - 4px) / 3);
     height: calc(100% - 4px);
     border-radius: 4px;
     background: var(--accent);
-    opacity: 0.18;
-    transition: left 0.25s cubic-bezier(0.4,0,0.2,1), background 0.25s ease;
+    opacity: 0.22;
+    transition: left 0.3s cubic-bezier(0.4,0,0.2,1), background 0.4s ease;
     pointer-events: none;
     z-index: 0;
 }
@@ -103,11 +110,11 @@ body.mode-plan {
     background: var(--mode-agent);
 }
 .mode-switch[data-active="chat"] .mode-slider {
-    left: calc(33.333% + 1px);
+    left: calc(2px + (100% - 4px) / 3);
     background: var(--mode-chat);
 }
 .mode-switch[data-active="plan"] .mode-slider {
-    left: calc(66.666% + 0px);
+    left: calc(2px + 2 * (100% - 4px) / 3);
     background: var(--mode-plan);
 }
 .mode-opt {
@@ -115,21 +122,25 @@ body.mode-plan {
     z-index: 1;
     background: transparent;
     border: none;
-    color: var(--muted);
+    color: var(--dim);
     font-size: 10px;
     font-weight: 600;
-    padding: 3px 8px;
+    padding: 4px 8px;
     cursor: pointer;
     border-radius: 4px;
-    transition: color 0.2s;
+    transition: color 0.3s ease;
     text-transform: uppercase;
-    letter-spacing: 0.3px;
+    letter-spacing: 0.4px;
+    flex: 1;
+    text-align: center;
 }
 .mode-opt.active {
     color: var(--fg);
 }
+body.mode-agent .mode-opt[data-mode="agent"].active { color: var(--mode-agent); }
+body.mode-plan .mode-opt[data-mode="plan"].active { color: var(--mode-plan); }
 .mode-opt:hover {
-    color: var(--fg);
+    color: var(--muted);
 }
 
 .btn {
@@ -317,6 +328,16 @@ button.icon-btn.on {
     user-select: text;
     -webkit-user-select: text;
     cursor: text;
+    border-radius: 6px;
+    padding: 8px 10px;
+}
+.msg.user {
+    background: var(--accent-soft);
+    border: 1px solid var(--accent-line);
+    transition: background var(--t) ease, border-color var(--t) ease;
+}
+.msg.assistant {
+    background: transparent;
 }
 .msg .role {
     font-size: 9px;
@@ -497,6 +518,75 @@ button.icon-btn.on {
 }
 .tool-block.error {
     border-color: var(--err);
+}
+.tool-block.streaming-tool {
+    opacity: 0.55;
+    border-style: dashed;
+    border-color: var(--accent-line);
+    pointer-events: none;
+}
+.streaming-dots {
+    display: inline-flex;
+    gap: 2px;
+    align-items: center;
+}
+.streaming-dots span {
+    width: 3px;
+    height: 3px;
+    border-radius: 50%;
+    background: var(--accent);
+    animation: wave 1.2s ease-in-out infinite;
+}
+.streaming-dots span:nth-child(2) { animation-delay: 0.12s; }
+.streaming-dots span:nth-child(3) { animation-delay: 0.24s; }
+
+/* ========== Task activity widget ========== */
+.task-activity {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    margin: 5px 0;
+    height: 28px;
+    animation: fadeIn 0.2s ease-out;
+}
+.task-dot {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    flex-shrink: 0;
+    z-index: 1;
+    color: #fff;
+    font-weight: 700;
+}
+.task-dot.created { background: var(--accent); }
+.task-dot.updated { background: #e3b341; }
+.task-dot.completed { background: var(--ok); }
+.task-dot.deleted { background: var(--err); opacity: 0.8; }
+.task-line {
+    height: 2px;
+    width: 40px;
+    flex-shrink: 0;
+    border-radius: 1px;
+}
+.task-dot.created + .task-line { background: linear-gradient(to right, var(--accent), transparent); }
+.task-dot.updated + .task-line { background: linear-gradient(to right, #e3b341, transparent); }
+.task-dot.completed + .task-line { background: linear-gradient(to right, var(--ok), transparent); }
+.task-dot.deleted + .task-line { background: linear-gradient(to right, var(--err), transparent); }
+.task-label {
+    font-size: 11px;
+    color: var(--muted);
+    padding-left: 6px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.task-label strong {
+    color: var(--fg);
+    font-weight: 500;
 }
 
 .tool-head {
@@ -773,6 +863,7 @@ button.icon-btn.on {
     gap: 4px;
     flex: 1;
     min-width: 0;
+    flex-wrap: wrap;
 }
 .composer-toolbar .toolbar-right {
     display: flex;
@@ -784,25 +875,29 @@ button.icon-btn.on {
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    padding: 2px 8px;
-    border: 1px solid var(--border-soft);
-    border-radius: 12px;
+    padding: 4px 10px;
+    background: rgba(127,127,127,0.1);
+    border: none;
+    border-radius: 6px;
     font-size: 10px;
+    font-weight: 600;
     color: var(--muted);
     cursor: pointer;
     max-width: 160px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    transition: border-color 0.15s, color 0.15s;
+    transition: color var(--t) ease, background 0.15s ease;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
 }
 .model-pill:hover {
-    border-color: var(--accent);
-    color: var(--accent);
+    color: var(--fg);
+    background: rgba(127,127,127,0.16);
 }
 .model-pill .pcaret {
     font-size: 8px;
-    opacity: 0.7;
+    opacity: 0.5;
 }
 
 .send-btn,
