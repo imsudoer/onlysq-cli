@@ -2224,13 +2224,85 @@
         } catch (err) {}
     });
 
+    // ========== Slash commands autocomplete ==========
+    var SLASH_CMDS = [
+        { cmd: "/clear", desc: "Start a new chat" },
+        { cmd: "/model", desc: "Show or change model" },
+        { cmd: "/export", desc: "Export chat (md/json)" },
+        { cmd: "/memory", desc: "List all memories" },
+        { cmd: "/memory set", desc: "Store a memory" },
+        { cmd: "/memory get", desc: "Retrieve a memory" },
+        { cmd: "/memory delete", desc: "Remove a memory" },
+        { cmd: "/memory clear", desc: "Wipe all memories" },
+        { cmd: "/help", desc: "Show all commands" },
+    ];
+    var slashActive = false;
+    var slashIdx = 0;
+    var slashFiltered = [];
+
+    function checkSlash() {
+        var val = inp.value;
+        if (!val.startsWith("/")) { closeSlash(); return; }
+        var q = val.toLowerCase();
+        slashFiltered = SLASH_CMDS.filter(function(s) { return s.cmd.startsWith(q); });
+        if (!slashFiltered.length) { closeSlash(); return; }
+        slashActive = true;
+        slashIdx = 0;
+        renderSlashPopup();
+    }
+    function renderSlashPopup() {
+        if (!mentionPopup) return;
+        mentionPopup.innerHTML = "";
+        mentionPopup.classList.add("open");
+        slashFiltered.forEach(function(s, i) {
+            var it = el("div", "mention-item" + (i === slashIdx ? " active" : ""), mentionPopup);
+            it.innerHTML = '<span class="mention-icon">/</span><b>' + escapeHtml(s.cmd) + '</b>&nbsp;<span class="muted small">' + escapeHtml(s.desc) + '</span>';
+            it.addEventListener("click", function() { acceptSlash(s); });
+        });
+    }
+    function acceptSlash(s) {
+        inp.value = s.cmd + " ";
+        inp.focus();
+        autoSize();
+        closeSlash();
+    }
+    function closeSlash() {
+        slashActive = false;
+        slashFiltered = [];
+        if (mentionPopup && !mentionActive) {
+            mentionPopup.classList.remove("open");
+            mentionPopup.innerHTML = "";
+        }
+    }
+
     // ========== Feature 2: @-mentions ==========
     var mentionDebounce;
     inp.addEventListener("input", function () {
         autoSize();
-        checkMention();
+        checkSlash();
+        if (!slashActive) checkMention();
     });
     inp.addEventListener("keydown", function (e) {
+        if (slashActive) {
+            if (e.key === "ArrowDown") {
+                e.preventDefault();
+                slashIdx = Math.min(slashIdx + 1, slashFiltered.length - 1);
+                renderSlashPopup();
+                return;
+            } else if (e.key === "ArrowUp") {
+                e.preventDefault();
+                slashIdx = Math.max(slashIdx - 1, 0);
+                renderSlashPopup();
+                return;
+            } else if (e.key === "Tab" || (e.key === "Enter" && slashFiltered.length)) {
+                e.preventDefault();
+                acceptSlash(slashFiltered[slashIdx]);
+                return;
+            } else if (e.key === "Escape") {
+                closeSlash();
+                return;
+            }
+        }
         if (!mentionActive) return;
         if (e.key === "ArrowDown") {
             e.preventDefault();

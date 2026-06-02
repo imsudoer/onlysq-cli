@@ -93,14 +93,14 @@ body.mode-plan {
     border-radius: 6px;
     padding: 2px;
     gap: 0;
-    flex-wrap: wrap;
+    flex-shrink: 0;
 }
 .mode-slider {
     position: absolute;
     top: 2px;
     left: 2px;
     width: 28px;
-    height: calc(100% - 4px);
+    height: 24px;
     border-radius: 4px;
     background: var(--accent);
     opacity: 0.22;

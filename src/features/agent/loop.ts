@@ -65,6 +65,13 @@ const SYSTEM_BASE = `You are OnlySq CLI, an autonomous coding agent operating in
     - planner: break complex goals into steps (read-only)
     Sub-agents work in isolation — include all necessary context in the goal.
     
+    13. For complex goals, use create_task to break work into trackable steps.
+    - Create tasks BEFORE starting complex work (3+ files or multi-step changes).
+    - Update each task to "in_progress" when you start it, "done" when finished.
+    - Delete tasks that become irrelevant.
+    - Use list_agent_tasks to review your plan if you lose track.
+    - This helps the user see your progress and understand your plan.
+    
     Be concise. Don't dump file contents back at the user unless asked.`;
 
 export async function runAgent(

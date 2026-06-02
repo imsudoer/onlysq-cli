@@ -148,3 +148,22 @@ export function getAllPendingIds(): string[] {
     }
     return ids;
 }
+
+export function hasPendingEdits(): boolean {
+    for (const [, p] of proposals) {
+        if (p.state === "pending") return true;
+    }
+    return false;
+}
+
+export function waitForPendingEdits(signal?: AbortSignal): Promise<void> {
+    return new Promise((resolve) => {
+        if (!hasPendingEdits()) { resolve(); return; }
+        const interval = setInterval(() => {
+            if (!hasPendingEdits() || signal?.aborted) {
+                clearInterval(interval);
+                resolve();
+            }
+        }, 200);
+    });
+}

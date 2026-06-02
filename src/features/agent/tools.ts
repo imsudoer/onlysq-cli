@@ -20,6 +20,8 @@ import {
     showDiff,
     applyProposal,
     rejectProposal,
+    hasPendingEdits,
+    waitForPendingEdits,
 } from "../../services/workspace/diffPreview";
 import { runInTerminal } from "../../services/workspace/terminal";
 import {
@@ -883,6 +885,9 @@ export const builtinTools: ToolHandler[] = [
             },
         },
         run: async (a: any) => {
+            if (hasPendingEdits()) {
+                await waitForPendingEdits();
+            }
             if (!(await askToolApproval("run_command", `Run: ${a.command}`)))
                 return "User denied command";
             const timeout = Math.min(
@@ -916,6 +921,9 @@ export const builtinTools: ToolHandler[] = [
             },
         },
         run: async (a: any) => {
+            if (hasPendingEdits()) {
+                await waitForPendingEdits();
+            }
             if (
                 !(await askToolApproval("run_command_interactive", `Start in terminal: ${a.command}`))
             )
