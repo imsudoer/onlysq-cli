@@ -76,7 +76,12 @@ const CHAT_BODY = `
     <textarea id="inp" rows="1" placeholder="Ask anything, or @ to mention a file…"></textarea>
     <div class="composer-toolbar">
       <div class="toolbar-left">
-        <button class="icon-btn" id="agentToggle" title="Agent mode (file edits)"><svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg></button>
+        <div class="mode-switch" id="modeSwitch">
+          <div class="mode-slider" id="modeSlider"></div>
+          <button class="mode-opt" data-mode="agent" title="Agent: reads & edits files">Agent</button>
+          <button class="mode-opt active" data-mode="chat" title="Chat: conversation only">Chat</button>
+          <button class="mode-opt" data-mode="plan" title="Plan: read-only analysis">Plan</button>
+        </div>
         <div class="model-pill" id="modelPill" title="Select model">
           <span id="modelLabel">Loading…</span>
           <span class="pcaret">▾</span>
@@ -315,7 +320,7 @@ export class ChatView implements vscode.WebviewViewProvider {
                     Logger.log(`[chat] queued live message during agent run: ${m.text.slice(0, 80)}`);
                     return;
                 }
-                return this.handleSend(m.text, m.mode);
+                return this.handleSend(m.text, m.mode, m.images);
 
             case "cancel":
                 Logger.log("[chat] cancel requested");
@@ -592,7 +597,8 @@ export class ChatView implements vscode.WebviewViewProvider {
 
     private async handleSend(
         text: string,
-        mode: "chat" | "agent"
+        mode: "chat" | "agent" | "plan",
+        images?: string[]
     ): Promise<void> {
         // Handle slash commands locally
         const slashResult = await this.handleSlashCommand(text);
@@ -615,9 +621,18 @@ export class ChatView implements vscode.WebviewViewProvider {
         const aborter = new AbortController();
         this.aborter = aborter;
 
+        // Build multimodal content if images present
+        let finalText: string = text;
+        const imageContent: Array<{type: "image_url"; image_url: {url: string}}> = [];
+        if (images?.length) {
+            for (const img of images) {
+                imageContent.push({ type: "image_url", image_url: { url: img } });
+            }
+        }
+
         try {
-            if (mode === "agent") await this.runAgentMode(text, aborter.signal);
-            else await this.runChatMode(text, aborter.signal);
+            if (mode === "agent" || mode === "plan") await this.runAgentMode(finalText, aborter.signal, mode === "plan", imageContent);
+            else await this.runChatMode(finalText, aborter.signal, imageContent);
         } catch (e: any) {
             Logger.error("[chat] send", e);
             this.post({ type: "error", message: String(e?.message ?? e) });
@@ -713,12 +728,16 @@ export class ChatView implements vscode.WebviewViewProvider {
 
     private async runChatMode(
         text: string,
-        signal: AbortSignal
+        signal: AbortSignal,
+        imageContent: Array<{type: "image_url"; image_url: {url: string}}> = []
     ): Promise<void> {
         const ctx = await editorContextSnippet();
-        const userContent = ctx
+        const textContent = ctx
             ? `${text}\n\n---\n**Editor context:**\n${ctx}`
             : text;
+        const userContent: any = imageContent.length
+            ? [{ type: "text", text: textContent }, ...imageContent]
+            : textContent;
         const rules = await this.readRulesFile();
         const memCtx = this.memory?.toContext() ?? "";
         const systemPrompt = `You are OnlySq CLI, a coding assistant inside VS Code.
@@ -762,12 +781,21 @@ export class ChatView implements vscode.WebviewViewProvider {
 
     private async runAgentMode(
         text: string,
-        signal: AbortSignal
+        signal: AbortSignal,
+        planOnly = false,
+        imageContent: Array<{type: "image_url"; image_url: {url: string}}> = []
     ): Promise<void> {
         const ctx = await editorContextSnippet();
-        const goal = ctx ? `${text}\n\n---\n**Editor context:**\n${ctx}` : text;
+        const goalText = ctx ? `${text}\n\n---\n**Editor context:**\n${ctx}` : text;
+        // If images, note them in text (vision handled at API level via history)
+        const goal = imageContent.length
+            ? goalText + `\n\n[${imageContent.length} image(s) attached — refer to the conversation history to see them]`
+            : goalText;
         const rules = await this.readRulesFile();
         const memCtx = this.memory?.toContext() ?? "";
+        const planCtx = planOnly
+            ? "\n\n--- PLAN MODE ---\nYou are in PLAN mode. You can ONLY read and analyze — do NOT modify any files, run commands, or make changes. Output a structured plan with numbered steps. Use only read-only tools."
+            : "";
         const cleanHistory = sanitizeHistoryForApi(this.history);
         let stepNum = 0;
         const updated = await runAgent(
@@ -785,6 +813,14 @@ export class ChatView implements vscode.WebviewViewProvider {
                             id: e.id,
                             name: e.name,
                             args: e.args,
+                        });
+                        break;
+                    case "tool-call-partial":
+                        this.post({
+                            type: "tool-call-partial",
+                            id: e.id,
+                            name: e.name,
+                            argsPartial: e.argsPartial,
                         });
                         break;
                     case "tool-result":
@@ -829,7 +865,7 @@ export class ChatView implements vscode.WebviewViewProvider {
                     return msgs;
                 },
             },
-            rules + memCtx,
+            rules + memCtx + planCtx,
         );
         this.liveMessages = [];
         if (this.activeChat) this.activeChat.messages = updated;

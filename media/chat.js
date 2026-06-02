@@ -129,7 +129,7 @@
         if (b) {
             sendBtn.style.display = "none";
             stopBtn.style.display = "";
-            if (pauseBtn) pauseBtn.style.display = mode === "agent" ? "" : "none";
+            if (pauseBtn) pauseBtn.style.display = (mode === "agent" || mode === "plan") ? "" : "none";
         } else {
             sendBtn.style.display = "";
             stopBtn.style.display = "none";
@@ -185,11 +185,16 @@
 
     function setMode(m) {
         mode = m;
-        agentBtn.classList.toggle("on", m === "agent");
-        agentBtn.title =
-            m === "agent"
-                ? "Agent mode: ON (file edits enabled)"
-                : "Agent mode: OFF";
+        var sw = $("modeSwitch");
+        if (sw) {
+            sw.setAttribute("data-active", m);
+            sw.querySelectorAll(".mode-opt").forEach(function(b) {
+                b.classList.toggle("active", b.dataset.mode === m);
+            });
+        }
+        document.body.classList.remove("mode-agent", "mode-chat", "mode-plan");
+        document.body.classList.add("mode-" + m);
+        try { localStorage.setItem("onlysq.mode", m); } catch(e) {}
     }
 
     function setModel(id, list) {
@@ -1098,6 +1103,10 @@
         get_memory: "Recalling",
         view_memories: "Listing memories",
         delete_memory: "Forgetting",
+        create_task: "Creating task",
+        update_task: "Updating task",
+        delete_task: "Removing task",
+        list_agent_tasks: "Listing tasks",
     };
 
     function summarizeArgs(name, args) {
@@ -1113,6 +1122,9 @@
             if (name === "add_memory") return args?.key ? args.key + " = " + (args.value || "").slice(0, 40) : "";
             if (name === "get_memory" || name === "delete_memory") return args?.key || "";
             if (name === "view_memories") return args?.query || "(all)";
+            if (name === "create_task") return args?.text ? args.text.slice(0, 50) : "";
+            if (name === "update_task") return args?.id ? args.id + " → " + (args.status || "") : "";
+            if (name === "delete_task") return args?.id || "";
             if (FILE_TOOLS.has(name) && args && args.path) {
                 if (name === "apply_at_line") {
                     const r =
@@ -1240,6 +1252,9 @@
                 rejectBtn.disabled = true;
                 vscode.postMessage({ type: "rejectEdit", id });
             });
+
+            // Cascading Apply All: show on last pending edit if 2+
+            updateApplyAllButtons();
         }
 
         scrollToBottom();
@@ -1281,7 +1296,7 @@
         if (!rawText) return;
 
         // During streaming in agent mode: send as live message
-        if (streaming && mode === "agent") {
+        if (streaming && (mode === "agent" || mode === "plan")) {
             addMsg("user", rawText);
             inp.value = "";
             autoSize();
@@ -1292,17 +1307,18 @@
 
         // Build the final text with attached files context
         var finalText = rawText;
+        var imageUrls = [];
         if (attachedFiles.length) {
-            var ctx = "\n\n---\n**Attached files:**\n";
+            var ctx = "";
             attachedFiles.forEach(function (af) {
-                if (af.isImage) {
-                    ctx += "\n[Image: " + af.name + "]\n";
+                if (af.isImage && af.content) {
+                    imageUrls.push(af.content);
                 } else {
                     var snippet = (af.content || "").slice(0, 8000);
                     ctx += "\n`" + (af.path || af.name) + "`:\n```\n" + snippet + "\n```\n";
                 }
             });
-            finalText += ctx;
+            if (ctx) finalText += "\n\n---\n**Attached files:**" + ctx;
             attachedFiles = [];
             renderAttachedFiles();
         }
@@ -1316,7 +1332,7 @@
         pendingEditIds = [];
         finalizeCurrent();
         setStreaming(true);
-        vscode.postMessage({ type: "send", text: finalText, mode: mode });
+        vscode.postMessage({ type: "send", text: finalText, mode: mode, images: imageUrls.length ? imageUrls : undefined });
     }
 
     function autoSize() {
@@ -1420,9 +1436,20 @@
         });
     }
 
-    agentBtn.addEventListener("click", () =>
-        setMode(mode === "agent" ? "chat" : "agent")
-    );
+    // Triple mode switch
+    var modeSwitchEl = $("modeSwitch");
+    if (modeSwitchEl) {
+        modeSwitchEl.querySelectorAll(".mode-opt").forEach(function(btn) {
+            btn.addEventListener("click", function() {
+                setMode(btn.dataset.mode);
+            });
+        });
+    }
+    try {
+        var savedMode = localStorage.getItem("onlysq.mode");
+        if (savedMode && ["agent","chat","plan"].indexOf(savedMode) >= 0) setMode(savedMode);
+        else setMode("chat");
+    } catch(e) { setMode("chat"); }
 
     newBtn.addEventListener("click", () => {
         vscode.postMessage({ type: "newChat" });
@@ -1725,13 +1752,49 @@
                 currentBody.classList.add("cursor");
                 scrollToBottom();
                 break;
-            case "tool-call":
-                if (currentBody) {
-                    currentBody.classList.remove("cursor");
-                    currentBody = null;
-                    currentAcc = "";
+            case "tool-call-partial":
+                // Show ghost/streaming tool preview
+                if (!toolBlocks.has(m.id)) {
+                    if (currentBody) {
+                        currentBody.classList.remove("cursor");
+                        currentBody = null;
+                        currentAcc = "";
+                    }
+                    var ghost = addToolBlock(m.id, m.name, {});
+                    if (ghost) ghost.classList.add("streaming-tool");
                 }
-                addToolBlock(m.id, m.name, m.args);
+                // Update partial args display
+                var partial = toolBlocks.get(m.id);
+                if (partial && partial.classList.contains("streaming-tool")) {
+                    var metaP = partial.querySelector(".tmeta");
+                    if (metaP) {
+                        try {
+                            var pArgs = JSON.parse(m.argsPartial || "{}");
+                            metaP.textContent = summarizeArgs(m.name, pArgs);
+                        } catch(e) { /* partial JSON */ }
+                    }
+                }
+                break;
+            case "tool-call":
+                // Finalize: remove ghost state if it existed
+                var existingGhost = toolBlocks.get(m.id);
+                if (existingGhost && existingGhost.classList.contains("streaming-tool")) {
+                    existingGhost.classList.remove("streaming-tool");
+                    existingGhost.style.opacity = "";
+                    existingGhost.style.pointerEvents = "";
+                    // Update with real args
+                    var metaR = existingGhost.querySelector(".tmeta");
+                    if (metaR) metaR.textContent = summarizeArgs(m.name, m.args);
+                    var nameR = existingGhost.querySelector(".tname");
+                    if (nameR) nameR.textContent = m.name;
+                } else {
+                    if (currentBody) {
+                        currentBody.classList.remove("cursor");
+                        currentBody = null;
+                        currentAcc = "";
+                    }
+                    addToolBlock(m.id, m.name, m.args);
+                }
                 break;
             case "tool-result":
                 setToolResult(m.id, m.name, m.args, m.result);
@@ -2220,11 +2283,34 @@
     function trackPendingEdit(id) {
         if (!pendingEditIds.includes(id)) pendingEditIds.push(id);
         updateMultiDiffBar();
+        updateApplyAllButtons();
     }
     function removePendingEdit(id) {
         pendingEditIds = pendingEditIds.filter(function(x) { return x !== id; });
         updateMultiDiffBar();
+        updateApplyAllButtons();
     }
+    function updateApplyAllButtons() {
+        // Remove old Apply All buttons
+        logBody.querySelectorAll(".apply-all-cascade").forEach(function(b) { b.remove(); });
+        if (pendingEditIds.length < 2) return;
+        // Find the last pending edit block
+        var lastId = pendingEditIds[pendingEditIds.length - 1];
+        var lastBlock = toolBlocks.get(lastId);
+        if (!lastBlock) return;
+        var actions = lastBlock.querySelector(".tool-actions");
+        if (!actions) return;
+        var allBtn = el("button", "btn primary small apply-all-cascade", actions);
+        allBtn.textContent = "Apply All (" + pendingEditIds.length + ")";
+        allBtn.addEventListener("click", function() {
+            // Apply from oldest to this one
+            var idsToApply = pendingEditIds.slice();
+            allBtn.disabled = true;
+            allBtn.textContent = "Applying…";
+            vscode.postMessage({ type: "applyAllEdits", ids: idsToApply });
+        });
+    }
+
     function updateMultiDiffBar() {
         var existing = logBody.querySelector(".multi-diff-bar");
         if (pendingEditIds.length < 2) {

@@ -47,6 +47,15 @@ export function setMemoryStore(store: MemoryStore): void {
     _memoryStore = store;
 }
 
+// Agent task list (in-session, not persisted)
+interface AgentTask {
+    id: string;
+    text: string;
+    status: "todo" | "in_progress" | "done";
+}
+const agentTasks: AgentTask[] = [];
+let taskCounter = 0;
+
 const obj = (props: Record<string, any>, required: string[] = []) => ({
     type: "object",
     properties: props,
@@ -1203,6 +1212,56 @@ export const builtinTools: ToolHandler[] = [
             } catch (e: any) {
                 return `Error: ${e?.message ?? e}`;
             }
+        },
+    },
+
+    {
+        def: { type: "function", function: {
+            name: "create_task",
+            description: "Create a task for yourself to track progress. Returns the task ID.",
+            parameters: obj({ text: str("Task description"), status: { type: "string", enum: ["todo", "in_progress", "done"], description: "Initial status, default todo" } }, ["text"]),
+        }},
+        run: async (a: any) => {
+            const id = "task-" + (++taskCounter);
+            agentTasks.push({ id, text: String(a.text), status: a.status || "todo" });
+            return `Created task ${id}: ${a.text}`;
+        },
+    },
+    {
+        def: { type: "function", function: {
+            name: "update_task",
+            description: "Update the status of a task.",
+            parameters: obj({ id: str("Task ID"), status: { type: "string", enum: ["todo", "in_progress", "done"], description: "New status" } }, ["id", "status"]),
+        }},
+        run: async (a: any) => {
+            const t = agentTasks.find(t => t.id === String(a.id));
+            if (!t) return `Task ${a.id} not found.`;
+            t.status = a.status;
+            return `Updated ${t.id}: ${t.status}`;
+        },
+    },
+    {
+        def: { type: "function", function: {
+            name: "delete_task",
+            description: "Delete a completed or unnecessary task.",
+            parameters: obj({ id: str("Task ID to delete") }, ["id"]),
+        }},
+        run: async (a: any) => {
+            const idx = agentTasks.findIndex(t => t.id === String(a.id));
+            if (idx < 0) return `Task ${a.id} not found.`;
+            agentTasks.splice(idx, 1);
+            return `Deleted task ${a.id}.`;
+        },
+    },
+    {
+        def: { type: "function", function: {
+            name: "list_agent_tasks",
+            description: "List all your current tasks with their status.",
+            parameters: obj({}),
+        }},
+        run: async () => {
+            if (!agentTasks.length) return "(no tasks)";
+            return agentTasks.map(t => `[${t.status}] ${t.id}: ${t.text}`).join("\n");
         },
     },
 

@@ -10,6 +10,7 @@ import { SUBAGENTS } from "./subagentDefs";
 export type AgentEvent =
     | { type: "token"; text: string }
     | { type: "tool-call"; id: string; name: string; args: any }
+    | { type: "tool-call-partial"; id: string; name: string; argsPartial: string }
     | { type: "tool-result"; id: string; name: string; result: string }
     | { type: "ask-user"; id: string; question: string; options?: string[]; multiSelect: boolean }
     | { type: "pause"; reason?: string }
@@ -140,7 +141,20 @@ export async function runAgent(
                     content += d.content;
                     onEvent({ type: "token", text: d.content });
                 }
-                if (d.toolCalls) toolCalls = d.toolCalls;
+                if (d.toolCalls) {
+                    toolCalls = d.toolCalls;
+                    // Emit partial tool preview for live display
+                    for (const tc of toolCalls) {
+                        if (tc.id && tc.function?.name) {
+                            onEvent({
+                                type: "tool-call-partial",
+                                id: tc.id,
+                                name: tc.function.name,
+                                argsPartial: tc.function.arguments || "",
+                            });
+                        }
+                    }
+                }
                 if (d.finishReason) finishReason = d.finishReason;
             }
         } catch (e: any) {

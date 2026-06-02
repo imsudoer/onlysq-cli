@@ -48,6 +48,7 @@ export const TOOL_DEFAULTS: Record<string, ToolPolicy> = {
     list_tasks: "always", git_status: "always", git_diff: "always",
     workspace_info: "always", system_info: "always", delegate: "always",
     add_memory: "always", get_memory: "always", view_memories: "always", delete_memory: "always",
+    create_task: "always", update_task: "always", delete_task: "always", list_agent_tasks: "always",
     // Write
     propose_edit: "ask", apply_at_line: "ask", replace_in_file: "ask",
     patch_file: "ask", delete_file: "ask", rename_file: "ask",

@@ -90,7 +90,8 @@ export class ChatStore {
     private previewOf(c: ChatSession): string {
         const firstUser = c.messages.find((m) => m.role === "user");
         if (!firstUser) return "(empty)";
-        const text = (firstUser.content ?? "").replace(/\s+/g, " ").trim();
+        const raw = firstUser.content;
+        const text = (typeof raw === "string" ? raw : (raw ?? []).filter((p: any) => p.type === "text").map((p: any) => p.text).join(" ")).replace(/\s+/g, " ").trim();
         return text.length > 80 ? text.slice(0, 80) + "…" : text;
     }
 
@@ -149,7 +150,11 @@ export class ChatStore {
         c.updatedAt = Date.now();
         if (c.title === "New chat" || !c.title) {
             const firstUser = c.messages.find((m) => m.role === "user");
-            if (firstUser?.content) c.title = this.autoTitle(firstUser.content);
+            if (firstUser?.content) {
+                const ct = firstUser.content;
+                const t = typeof ct === "string" ? ct : ct.filter(p => p.type === "text").map(p => (p as any).text).join(" ");
+                c.title = this.autoTitle(t);
+            }
         }
         await this.persist();
     }

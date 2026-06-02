@@ -3,6 +3,11 @@
     --accent-fg: #ffffff;
     --accent-soft: rgba(253, 107, 3, 0.12);
     --accent-line: rgba(253, 107, 3, 0.4);
+
+    /* Mode-specific accent colors */
+    --mode-agent: #fd6b03;
+    --mode-chat: #a0a0a0;
+    --mode-plan: #58a6ff;
     --fg: var(--vscode-foreground);
     --muted: var(--vscode-descriptionForeground);
     --dim: var(--vscode-disabledForeground, rgba(255, 255, 255, 0.4));
@@ -49,6 +54,82 @@ body {
 
 button {
     font-family: inherit;
+}
+
+/* ========== Mode-based accent transition ========== */
+body {
+    transition: --accent 0.35s ease;
+}
+body.mode-agent {
+    --accent: #fd6b03;
+    --accent-soft: rgba(253, 107, 3, 0.12);
+    --accent-line: rgba(253, 107, 3, 0.4);
+}
+body.mode-chat {
+    --accent: #a0a0a0;
+    --accent-soft: rgba(160, 160, 160, 0.12);
+    --accent-line: rgba(160, 160, 160, 0.4);
+}
+body.mode-plan {
+    --accent: #58a6ff;
+    --accent-soft: rgba(88, 166, 255, 0.12);
+    --accent-line: rgba(88, 166, 255, 0.4);
+}
+
+/* ========== Triple mode switch ========== */
+.mode-switch {
+    display: flex;
+    position: relative;
+    background: rgba(127,127,127,0.1);
+    border-radius: 6px;
+    padding: 2px;
+    gap: 0;
+}
+.mode-slider {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: calc(33.333% - 1px);
+    height: calc(100% - 4px);
+    border-radius: 4px;
+    background: var(--accent);
+    opacity: 0.18;
+    transition: left 0.25s cubic-bezier(0.4,0,0.2,1), background 0.25s ease;
+    pointer-events: none;
+    z-index: 0;
+}
+.mode-switch[data-active="agent"] .mode-slider {
+    left: 2px;
+    background: var(--mode-agent);
+}
+.mode-switch[data-active="chat"] .mode-slider {
+    left: calc(33.333% + 1px);
+    background: var(--mode-chat);
+}
+.mode-switch[data-active="plan"] .mode-slider {
+    left: calc(66.666% + 0px);
+    background: var(--mode-plan);
+}
+.mode-opt {
+    position: relative;
+    z-index: 1;
+    background: transparent;
+    border: none;
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 600;
+    padding: 3px 8px;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: color 0.2s;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+.mode-opt.active {
+    color: var(--fg);
+}
+.mode-opt:hover {
+    color: var(--fg);
 }
 
 .btn {
@@ -377,6 +458,39 @@ button.icon-btn.on {
 }
 .tool-block.applied {
     border-color: rgba(63, 185, 80, 0.4);
+}
+.tool-block.streaming-tool {
+    opacity: 0.55;
+    border-style: dashed;
+    pointer-events: none;
+}
+.tool-block.streaming-tool .tspinner {
+    width: auto;
+    height: auto;
+    background: none;
+    animation: none;
+}
+/* Task list */
+.task-list {
+    margin: 6px 0;
+    padding: 0;
+    list-style: none;
+}
+.task-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 0;
+    font-size: 12px;
+}
+.task-item .task-status {
+    font-size: 10px;
+    width: 18px;
+    text-align: center;
+}
+.task-item.done .task-text {
+    text-decoration: line-through;
+    opacity: 0.6;
 }
 .tool-block.rejected {
     border-color: rgba(248, 81, 73, 0.4);
