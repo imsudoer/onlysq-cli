@@ -32,7 +32,7 @@ import { gotoLocation, getCursor } from "../../services/workspace/editorOps";
 import { gitStatus, gitDiff } from "../../services/workspace/git";
 import { listTasks, runTaskByName } from "../../services/workspace/tasks";
 import { systemInfo } from "../../core/systemInfo";
-import { askApproval } from "./approval";
+import { askToolApproval } from "./approval";
 import { settings } from "../../core/config";
 import {
     previewReplaceInFile,
@@ -40,6 +40,12 @@ import {
 } from "../../services/workspace/replaceInFile";
 import { SUBAGENTS } from "./subagentDefs";
 import { fetchUrl, webSearch, scrapePage } from "../../services/workspace/web";
+import type { MemoryStore } from "../../services/memory/memoryStore";
+
+let _memoryStore: MemoryStore | undefined;
+export function setMemoryStore(store: MemoryStore): void {
+    _memoryStore = store;
+}
 
 const obj = (props: Record<string, any>, required: string[] = []) => ({
     type: "object",
@@ -58,9 +64,10 @@ async function finalizeEditProposal(
     proposalId: string,
     path: string,
     reason: string | undefined,
-    actionLabel: string
+    actionLabel: string,
+    toolName: string = "propose_edit"
 ): Promise<string> {
-    const mode = settings().approval.write;
+    const mode = settings().toolPolicy[toolName] ?? "ask";
     if (mode === "always") {
         await applyProposal(proposalId);
         return `${actionLabel} applied to ${path} (auto-approved).${
@@ -376,7 +383,8 @@ export const builtinTools: ToolHandler[] = [
                 proposal.id,
                 String(a.path),
                 a.reason ? String(a.reason) : undefined,
-                "Edit"
+                "Edit",
+                "propose_edit"
             );
         },
     },
@@ -453,7 +461,8 @@ export const builtinTools: ToolHandler[] = [
                     proposal.id,
                     edit.path,
                     a.reason ? String(a.reason) : undefined,
-                    `${edit.mode} at line ${edit.startLine}`
+                    `${edit.mode} at line ${edit.startLine}`,
+                    "apply_at_line"
                 );
             } catch (e: any) {
                 return `Error: ${e?.message ?? e}`;
@@ -570,7 +579,8 @@ export const builtinTools: ToolHandler[] = [
                     proposal.id,
                     String(a.path),
                     a.reason ? String(a.reason) : undefined,
-                    "Replace"
+                    "Replace",
+                    "replace_in_file"
                 );
                 return summaryLines.join("\n") + "\n\n" + finalNote;
             } catch (e: any) {
@@ -616,7 +626,8 @@ export const builtinTools: ToolHandler[] = [
                     proposal.id,
                     String(a.path),
                     a.reason ? String(a.reason) : undefined,
-                    "Patch"
+                    "Patch",
+                    "patch_file"
                 );
             } catch (e: any) {
                 return `Error: ${e?.message ?? e}`;
@@ -637,8 +648,8 @@ export const builtinTools: ToolHandler[] = [
         },
         run: async ({ path }: { path: string }) => {
             if (
-                !(await askApproval(
-                    "delete",
+                !(await askToolApproval(
+                    "delete_file",
                     `OnlySq agent wants to delete ${path}. Allow?`
                 ))
             ) {
@@ -666,8 +677,8 @@ export const builtinTools: ToolHandler[] = [
         },
         run: async ({ from, to }: { from: string; to: string }) => {
             if (
-                !(await askApproval(
-                    "rename",
+                !(await askToolApproval(
+                    "rename_file",
                     `OnlySq agent wants to rename ${from} -> ${to}. Allow?`
                 ))
             ) {
@@ -863,7 +874,7 @@ export const builtinTools: ToolHandler[] = [
             },
         },
         run: async (a: any) => {
-            if (!(await askApproval("shell", `Run: ${a.command}`)))
+            if (!(await askToolApproval("run_command", `Run: ${a.command}`)))
                 return "User denied command";
             const timeout = Math.min(
                 Math.max(1000, Number(a.timeout_ms) || 30_000),
@@ -897,7 +908,7 @@ export const builtinTools: ToolHandler[] = [
         },
         run: async (a: any) => {
             if (
-                !(await askApproval("shell", `Start in terminal: ${a.command}`))
+                !(await askToolApproval("run_command_interactive", `Start in terminal: ${a.command}`))
             )
                 return "User denied command";
             const full = a.cwd ? `cd "${a.cwd}" && ${a.command}` : a.command;
@@ -960,7 +971,7 @@ export const builtinTools: ToolHandler[] = [
             },
         },
         run: async ({ name }: { name: string }) => {
-            if (!(await askApproval("shell", `Run task "${name}"?`)))
+            if (!(await askToolApproval("run_task", `Run task "${name}"?`)))
                 return "User denied task";
             return runTaskByName(name);
         },
@@ -1049,8 +1060,8 @@ export const builtinTools: ToolHandler[] = [
         },
         run: async ({ command, args }: { command: string; args?: any[] }) => {
             if (
-                !(await askApproval(
-                    "vscodeCommand",
+                !(await askToolApproval(
+                    "run_vscode_command",
                     `Run VS Code command "${command}"?`
                 ))
             ) {
@@ -1087,7 +1098,7 @@ export const builtinTools: ToolHandler[] = [
             },
         },
         run: async (a: any) => {
-            if (!(await askApproval("web", `Fetch ${a.url}?`)))
+            if (!(await askToolApproval("fetch_url", `Fetch ${a.url}?`)))
                 return "User denied web request";
             try {
                 const r = await fetchUrl(String(a.url), {
@@ -1122,7 +1133,7 @@ export const builtinTools: ToolHandler[] = [
             },
         },
         run: async (a: any) => {
-            if (!(await askApproval("web", `Web search: ${a.query}?`)))
+            if (!(await askToolApproval("web_search", `Web search: ${a.query}?`)))
                 return "User denied web search";
             try {
                 return await webSearch(String(a.query), a.max_results ?? 5);
@@ -1147,7 +1158,7 @@ export const builtinTools: ToolHandler[] = [
             },
         },
         run: async (a: any) => {
-            if (!(await askApproval("web", `Scrape ${a.url}?`)))
+            if (!(await askToolApproval("scrape_page", `Scrape ${a.url}?`)))
                 return "User denied scraping";
             try {
                 return await scrapePage(String(a.url));
@@ -1175,7 +1186,7 @@ export const builtinTools: ToolHandler[] = [
             },
         },
         run: async (a: any) => {
-            if (!(await askApproval("shell", `Git commit: ${a.message}?`)))
+            if (!(await askToolApproval("git_commit", `Git commit: ${a.message}?`)))
                 return "User denied commit";
             try {
                 const { executeShell, formatShellResult } = await import("../../services/workspace/shell");
@@ -1192,6 +1203,56 @@ export const builtinTools: ToolHandler[] = [
             } catch (e: any) {
                 return `Error: ${e?.message ?? e}`;
             }
+        },
+    },
+
+    {
+        def: { type: "function", function: {
+            name: "add_memory",
+            description: "Store a persistent key-value pair in agent memory. Use to remember user preferences, project context, decisions, etc. Survives between sessions.",
+            parameters: obj({ key: str("Memory key (short label)"), value: str("Value to store") }, ["key", "value"]),
+        }},
+        run: async (a: any) => {
+            if (!_memoryStore) return "Error: memory store not initialized";
+            await _memoryStore.set(String(a.key), String(a.value));
+            return `Stored: ${a.key} = ${String(a.value).slice(0, 100)}`;
+        },
+    },
+    {
+        def: { type: "function", function: {
+            name: "get_memory",
+            description: "Retrieve a value from agent memory by key.",
+            parameters: obj({ key: str("Memory key to look up") }, ["key"]),
+        }},
+        run: async (a: any) => {
+            if (!_memoryStore) return "Error: memory store not initialized";
+            const v = _memoryStore.get(String(a.key));
+            return v !== undefined ? `${a.key} = ${v}` : `Key "${a.key}" not found in memory.`;
+        },
+    },
+    {
+        def: { type: "function", function: {
+            name: "view_memories",
+            description: "List all stored memories, optionally filtered by a search query.",
+            parameters: obj({ query: str("Optional search filter") }),
+        }},
+        run: async (a: any) => {
+            if (!_memoryStore) return "Error: memory store not initialized";
+            const entries = a.query ? _memoryStore.search(String(a.query)) : _memoryStore.list();
+            if (!entries.length) return "(no memories stored)";
+            return entries.map((e: any) => `${e.key}: ${e.value}`).join("\n");
+        },
+    },
+    {
+        def: { type: "function", function: {
+            name: "delete_memory",
+            description: "Delete a memory entry by key.",
+            parameters: obj({ key: str("Key to delete") }, ["key"]),
+        }},
+        run: async (a: any) => {
+            if (!_memoryStore) return "Error: memory store not initialized";
+            const ok = await _memoryStore.delete(String(a.key));
+            return ok ? `Deleted: ${a.key}` : `Key "${a.key}" not found.`;
         },
     },
 

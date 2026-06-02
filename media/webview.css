@@ -440,9 +440,10 @@ button.icon-btn.on {
 }
 .tool-body {
     display: none;
-    padding: 6px 8px;
+    padding: 8px 10px;
     border-top: 1px solid var(--border-soft);
     font-size: 11px;
+    background: rgba(127,127,127,0.02);
 }
 .tool-block.open .tool-body {
     display: block;
@@ -452,6 +453,11 @@ button.icon-btn.on {
     margin-bottom: 6px;
     white-space: pre-wrap;
     word-break: break-all;
+    background: rgba(0,0,0,0.1);
+    padding: 6px 8px;
+    border-radius: 3px;
+    max-height: 200px;
+    overflow-y: auto;
 }
 .tool-reason {
     padding: 4px 10px 6px;
@@ -475,9 +481,13 @@ button.icon-btn.on {
 .tool-body .tresult {
     color: var(--fg);
     opacity: 0.85;
-    max-height: 200px;
+    max-height: 250px;
     overflow-y: auto;
     white-space: pre-wrap;
+    background: rgba(0,0,0,0.1);
+    padding: 6px 8px;
+    border-radius: 3px;
+    font-size: 11px;
 }
 .tool-body .tlabel {
     font-size: 9px;
@@ -489,14 +499,21 @@ button.icon-btn.on {
 }
 .tool-actions {
     display: flex;
-    gap: 6px;
-    padding: 6px 8px;
+    gap: 5px;
+    padding: 4px 8px;
     border-top: 1px solid var(--border-soft);
-    background: transparent;
+    justify-content: flex-end;
+    background: rgba(127,127,127,0.03);
 }
 .tool-actions .btn {
-    font-size: 11px;
-    padding: 3px 10px;
+    font-size: 10px;
+    padding: 2px 8px;
+}
+.tool-actions .status-label {
+    font-size: 10px;
+    color: var(--muted);
+    align-self: center;
+    margin-right: auto;
 }
 .tool-block.file .tool-head .tmeta {
     color: var(--fg);
@@ -1784,16 +1801,20 @@ button.icon-btn.on {
 }
 
 /* ========== Export menu ========== */
+.export-btn-wrap {
+    position: relative;
+    display: inline-block;
+}
 .export-menu {
     position: absolute;
-    top: 100%;
+    top: calc(100% + 2px);
     right: 0;
     background: var(--bg);
     border: 1px solid var(--border);
     border-radius: 4px;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
     z-index: 60;
-    min-width: 140px;
+    min-width: 160px;
     display: none;
 }
 .export-menu.visible {

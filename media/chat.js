@@ -706,26 +706,57 @@
             values,
             "textarea"
         );
-        settingRow(
-            agent,
-            "Disabled tools",
-            "agent.disabledTools",
-            values,
-            "textarea-list"
-        );
 
         const approval = el("section", "card", settingsBody);
-        approval.innerHTML = '<div class="card-title">Approval policy</div>';
-        [
-            ["File writes", "approval.write"],
-            ["Deletions", "approval.delete"],
-            ["Renames", "approval.rename"],
-            ["Shell commands", "approval.shell"],
-            ["VS Code commands", "approval.vscodeCommand"],
-            ["Web requests", "approval.web"],
-        ].forEach(([label, key]) =>
-            settingRow(approval, label, key, values, "enum-approval")
-        );
+        approval.innerHTML = '<div class="card-title">Tool Policy</div>' +
+            '<div class="small muted" style="margin-bottom:8px">Per-tool: always (auto-approve) / ask (prompt) / never (deny) / disabled (hide from agent)</div>';
+        var policy = values["agent.toolPolicy"] || {};
+        var toolGroups = {
+            "Read-only": ["read_file","list_dir","list_tree","search","find_files","file_info","find_in_file",
+                "open_file","goto_position","get_cursor","get_selection","list_open_files","get_diagnostics",
+                "list_tasks","git_status","git_diff","workspace_info","system_info"],
+            "File edits": ["propose_edit","apply_at_line","replace_in_file","patch_file","delete_file","rename_file"],
+            "Shell / commands": ["run_command","run_command_interactive","run_task","run_vscode_command","open_in_browser","git_commit"],
+            "Web": ["fetch_url","web_search","scrape_page"],
+            "Meta": ["pause_agent","ask_user","delegate"],
+        };
+        Object.entries(toolGroups).forEach(function(entry) {
+            var groupName = entry[0], toolNames = entry[1];
+            var sub = el("div", "", approval);
+            sub.style.marginBottom = "8px";
+            var subTitle = el("div", "small muted", sub);
+            subTitle.style.fontWeight = "600";
+            subTitle.style.marginBottom = "4px";
+            subTitle.textContent = groupName;
+            toolNames.forEach(function(tn) {
+                var row = el("div", "setting-row", sub);
+                row.style.padding = "2px 0";
+                var lab = el("label", "setting-label", row);
+                lab.textContent = tn;
+                lab.style.fontSize = "11px";
+                lab.style.fontFamily = "var(--vscode-editor-font-family)";
+                var ctl = el("div", "setting-control", row);
+                var sel = document.createElement("select");
+                sel.className = "setting-input";
+                sel.style.fontSize = "10px";
+                sel.style.padding = "1px 4px";
+                var cur = policy[tn] || "";
+                ["always","ask","never","disabled"].forEach(function(v) {
+                    var o = document.createElement("option");
+                    o.value = v;
+                    o.textContent = v;
+                    if (v === cur) o.selected = true;
+                    sel.appendChild(o);
+                });
+                ctl.appendChild(sel);
+                sel.addEventListener("change", function() {
+                    var updated = Object.assign({}, policy);
+                    updated[tn] = sel.value;
+                    policy = updated;
+                    vscode.postMessage({ type: "setSetting", key: "agent.toolPolicy", value: updated });
+                });
+            });
+        });
 
         const diag = el("section", "card", settingsBody);
         diag.innerHTML = '<div class="card-title">Diagnostics</div>';
@@ -1063,6 +1094,10 @@
         web_search: "Searching web",
         scrape_page: "Scraping",
         git_commit: "Committing",
+        add_memory: "Remembering",
+        get_memory: "Recalling",
+        view_memories: "Listing memories",
+        delete_memory: "Forgetting",
     };
 
     function summarizeArgs(name, args) {
@@ -1075,6 +1110,9 @@
             if (name === "fetch_url" || name === "scrape_page") return args?.url || "";
             if (name === "web_search") return args?.query || "";
             if (name === "git_commit") return args?.message ? args.message.slice(0, 60) : "";
+            if (name === "add_memory") return args?.key ? args.key + " = " + (args.value || "").slice(0, 40) : "";
+            if (name === "get_memory" || name === "delete_memory") return args?.key || "";
+            if (name === "view_memories") return args?.query || "(all)";
             if (FILE_TOOLS.has(name) && args && args.path) {
                 if (name === "apply_at_line") {
                     const r =
@@ -1208,43 +1246,49 @@
     }
 
     function updateEditResult(id, state) {
-        const block = toolBlocks.get(id);
+        var block = toolBlocks.get(id);
         if (!block) return;
         block.classList.remove("error");
         removePendingEdit(id);
         if (state === "applied") {
             block.classList.add("applied");
             lastAppliedEditId = id;
-            // extract path from block for undo bar
             var metaEl = block.querySelector(".tmeta");
             var filePath = metaEl ? metaEl.textContent : "";
             showUndoBar(id, filePath);
         }
         if (state === "rejected") block.classList.add("rejected");
-        const actions = block.querySelector(".tool-actions");
+        var actions = block.querySelector(".tool-actions");
         if (actions) {
             actions.innerHTML = "";
-            const viewBtn = document.createElement("button");
+            var statusLabel = document.createElement("span");
+            statusLabel.className = "status-label";
+            statusLabel.textContent = state === "applied" ? "\u2713 Applied" : "\u2717 Rejected";
+            actions.appendChild(statusLabel);
+            var viewBtn = document.createElement("button");
             viewBtn.className = "btn ghost small";
             viewBtn.textContent = "View diff";
-            viewBtn.addEventListener("click", () =>
-                vscode.postMessage({ type: "showDiff", id })
-            );
+            viewBtn.addEventListener("click", function() {
+                vscode.postMessage({ type: "showDiff", id: id });
+            });
             actions.appendChild(viewBtn);
-            const label = document.createElement("span");
-            label.className = "small muted";
-            label.style.marginLeft = "6px";
-            label.style.alignSelf = "center";
-            label.textContent =
-                state === "applied" ? "✓ Applied" : "✗ Rejected";
-            actions.appendChild(label);
         }
     }
 
     function send() {
         if (!signedIn) return;
         var rawText = inp.value.trim();
-        if (!rawText || streaming) return;
+        if (!rawText) return;
+
+        // During streaming in agent mode: send as live message
+        if (streaming && mode === "agent") {
+            addMsg("user", rawText);
+            inp.value = "";
+            autoSize();
+            vscode.postMessage({ type: "send", text: rawText, mode: "agent" });
+            return;
+        }
+        if (streaming) return;
 
         // Build the final text with attached files context
         var finalText = rawText;
@@ -1665,9 +1709,14 @@
                 clearStatusPill();
                 if (!currentBody) startAssistantBody();
                 currentAcc += m.text;
-                // Render without triggering animations on existing content
-                var rendered = renderMarkdown(currentAcc);
-                currentBody.innerHTML = rendered;
+                // Mark existing children so we can animate only new ones
+                var prevCount = currentBody.childNodes.length;
+                currentBody.innerHTML = renderMarkdown(currentAcc);
+                // Animate only newly added top-level children
+                var kids = currentBody.childNodes;
+                for (var ci = prevCount; ci < kids.length; ci++) {
+                    if (kids[ci].nodeType === 1) kids[ci].style.animation = "chunkIn 0.18s ease-out";
+                }
                 var parentMsg2 = currentBody.closest(".msg");
                 if (parentMsg2) {
                     parentMsg2.dataset.raw = currentAcc;
@@ -1693,6 +1742,11 @@
                 break;
             case "thinking":
                 showStatusPill(m.text || "Thinking…");
+                break;
+            case "step":
+                if (m.step && m.maxSteps) {
+                    showStatusPill("Step " + m.step + "/" + m.maxSteps);
+                }
                 break;
             case "done":
                 finalizeCurrent();
@@ -2236,29 +2290,45 @@
 
     // ========== Tool Grouping: collapse completed tools ==========
     function groupCompletedTools() {
-        var blocks = Array.from(logBody.querySelectorAll(".tool-block"));
+        // Don't re-group if already grouped
+        if (logBody.querySelector(".tool-group-collapsed")) return;
+        var allChildren = Array.from(logBody.children);
         var consecutive = [];
-        for (var i = 0; i < blocks.length; i++) {
-            var b = blocks[i];
-            var hasCheck = b.querySelector(".tcheck");
-            if (hasCheck && !b.classList.contains("open") && !b.closest(".tool-group-expanded")) {
-                consecutive.push(b);
-            } else {
-                if (consecutive.length >= 3) collapseGroup(consecutive);
-                consecutive = [];
-            }
+        function flush() {
+            if (consecutive.length >= 3) collapseGroup(consecutive.slice());
+            consecutive = [];
         }
-        if (consecutive.length >= 3) collapseGroup(consecutive);
+        for (var i = 0; i < allChildren.length; i++) {
+            var node = allChildren[i];
+            if (node.classList && node.classList.contains("tool-block")) {
+                var hasCheck = node.querySelector(".tcheck");
+                var isEditPending = node.querySelector(".tool-actions .btn.primary");
+                if (hasCheck && !isEditPending) {
+                    consecutive.push(node);
+                    continue;
+                }
+            }
+            flush();
+        }
+        flush();
     }
     function collapseGroup(blocks) {
-        var header = el("div", "tool-group-collapsed");
+        var header = document.createElement("div");
+        header.className = "tool-group-collapsed";
+        var names = {};
+        blocks.forEach(function(b) {
+            var n = b.querySelector(".tname");
+            if (n) names[n.textContent] = (names[n.textContent] || 0) + 1;
+        });
+        var summary = Object.entries(names).map(function(e) { return e[1] + "x " + e[0]; }).join(", ");
         header.innerHTML = '<span class="tgc-icon">\u2713</span>' +
-            '<span>' + blocks.length + ' completed tools</span>' +
+            '<span>' + blocks.length + ' tools (' + summary + ')</span>' +
             '<span class="tgc-arrow">\u25B6</span>';
-        var container = el("div", "tool-group-expanded");
+        var container = document.createElement("div");
+        container.className = "tool-group-expanded";
         var first = blocks[0];
         first.parentNode.insertBefore(header, first);
-        first.parentNode.insertBefore(container, first);
+        first.parentNode.insertBefore(container, header.nextSibling);
         blocks.forEach(function(b) { container.appendChild(b); });
         header.addEventListener("click", function() {
             header.classList.toggle("open");

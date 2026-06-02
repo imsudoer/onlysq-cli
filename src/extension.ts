@@ -8,7 +8,8 @@ import { AuthService } from "./services/auth/authService";
 import { OpenAIClient } from "./services/llm/openaiClient";
 import { ModelsService } from "./services/llm/modelsService";
 import { ToolRegistry } from "./features/agent/toolRegistry";
-import { builtinTools } from "./features/agent/tools";
+import { builtinTools, setMemoryStore } from "./features/agent/tools";
+import { MemoryStore } from "./services/memory/memoryStore";
 import { OnlySqInlineProvider } from "./features/completion/provider";
 import { ChatView } from "./ui/chatView";
 import { StatusBar } from "./ui/statusBar";
@@ -25,14 +26,17 @@ export async function activate(ctx: vscode.ExtensionContext) {
 
     const modelsService = new ModelsService(ctx, auth);
 
+    const memory = new MemoryStore(ctx);
+
     const registry = new ToolRegistry();
     registry.registerAll(builtinTools);
+    setMemoryStore(memory);
 
     registerDiffProvider(ctx);
 
     const usage = new UsageTracker(ctx);
     const client = new OpenAIClient(auth, usage);
-    const chat = new ChatView(ctx, client, registry, auth, modelsService);
+    const chat = new ChatView(ctx, client, registry, auth, modelsService, memory);
 
     const status = new StatusBar(auth, usage);
 

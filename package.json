@@ -2,7 +2,7 @@
     "name": "onlysq-cli",
     "displayName": "OnlySq CLI",
     "description": "AI coding assistant by OnlySq — inline completions, chat, and agent mode with native diff previews",
-    "version": "0.2.1",
+    "version": "0.2.2",
     "publisher": "subashev",
     "repository": {
         "type": "git",
@@ -206,65 +206,19 @@
                     "default": true,
                     "description": "Persist chat history between VS Code sessions."
                 },
-                "onlysq.approval.write": {
-                    "type": "string",
-                    "enum": [
-                        "always",
-                        "ask",
-                        "never"
-                    ],
-                    "default": "ask",
-                    "description": "Approval for file writes (propose_edit, patch_file, apply_at_line)."
-                },
-                "onlysq.approval.delete": {
-                    "type": "string",
-                    "enum": [
-                        "always",
-                        "ask",
-                        "never"
-                    ],
-                    "default": "ask",
-                    "description": "Approval for file deletions."
-                },
-                "onlysq.approval.rename": {
-                    "type": "string",
-                    "enum": [
-                        "always",
-                        "ask",
-                        "never"
-                    ],
-                    "default": "ask",
-                    "description": "Approval for file renames."
-                },
-                "onlysq.approval.shell": {
-                    "type": "string",
-                    "enum": [
-                        "always",
-                        "ask",
-                        "never"
-                    ],
-                    "default": "ask",
-                    "description": "Approval for shell / task execution."
-                },
-                "onlysq.approval.vscodeCommand": {
-                    "type": "string",
-                    "enum": [
-                        "always",
-                        "ask",
-                        "never"
-                    ],
-                    "default": "ask",
-                    "description": "Approval for arbitrary VS Code commands."
-                },
-                "onlysq.approval.web": {
-                    "type": "string",
-                    "enum": [
-                        "always",
-                        "ask",
-                        "never"
-                    ],
-                    "default": "ask",
-                    "description": "Approval for web requests (fetch_url, web_search, scrape_page)."
+                "onlysq.agent.toolPolicy": {
+                    "type": "object",
+                    "default": {},
+                    "markdownDescription": "Per-tool approval policy. Key = tool name, value = `always` / `ask` / `never` / `disabled`. Unset tools use defaults (read-only = always, write/shell/web = ask).",
+                    "additionalProperties": {
+                        "type": "string",
+                        "enum": [
+                            "always",
+                            "ask",
+                            "never",
+                            "disabled"
+                        ]
+                    }
                 },
                 "onlysq.agent.customSystemPrompt": {
                     "type": "string",
@@ -276,14 +230,6 @@
                     "type": "boolean",
                     "default": false,
                     "description": "Let the agent learn your preferences from conversations."
-                },
-                "onlysq.agent.disabledTools": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    },
-                    "default": [],
-                    "description": "List of tool names to disable (e.g. [\"run_command\", \"delete_file\"])."
                 }
             }
         }

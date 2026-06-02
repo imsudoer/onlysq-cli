@@ -13,6 +13,7 @@ export type AgentEvent =
     | { type: "tool-result"; id: string; name: string; result: string }
     | { type: "ask-user"; id: string; question: string; options?: string[]; multiSelect: boolean }
     | { type: "pause"; reason?: string }
+    | { type: "step"; step: number; maxSteps: number }
     | { type: "done"; reason?: string }
     | { type: "error"; message: string };
 
@@ -73,6 +74,7 @@ export async function runAgent(
     signal?: AbortSignal,
     history: ChatMessage[] = [],
     control?: AgentControl,
+    extraContext?: string,
 ): Promise<ChatMessage[]> {
     const cfg = settings();
     const cache = new ToolCache(cfg.toolCache);
@@ -84,20 +86,23 @@ export async function runAgent(
     if (cfg.personalization) {
         systemPrompt += `\n\n--- Personalization ---\nLearn the user's preferences, coding style, and patterns from this conversation. Adapt your responses accordingly. Remember what they like and dislike.`;
     }
+    if (extraContext) {
+        systemPrompt += extraContext;
+    }
 
     const messages: ChatMessage[] = [
         { role: "system", content: systemPrompt },
         ...history,
         { role: "user", content: goal },
     ];
-    const disabled = new Set(cfg.disabledTools);
-    const tools = registry.list().filter(t => !disabled.has(t.function.name));
+    const tools = registry.list().filter(t => cfg.toolPolicy[t.function.name] !== "disabled");
 
     Logger.log(
         `[agent] starting run, history=${history.length}, tools=${tools.length}, max_steps=${cfg.maxAgentSteps}`
     );
 
     for (let step = 0; step < cfg.maxAgentSteps; step++) {
+        onEvent({ type: "step", step: step + 1, maxSteps: cfg.maxAgentSteps });
         if (control?.shouldPause()) {
             Logger.log("[agent] pause before next step");
             onEvent({ type: "pause", reason: "Paused before next step" });

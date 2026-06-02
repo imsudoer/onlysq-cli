@@ -11,6 +11,7 @@ import { ChatStore, ChatSession } from "../services/chat/chatStore";
 import { systemBriefForLLM } from "../core/systemInfo";
 import { sanitizeHistoryForApi } from "../services/llm/historyUtils";
 import { settings, updateSetting, SAUTH } from "../core/config";
+import { MemoryStore } from "../services/memory/memoryStore";
 
 const HISTORY_WINDOW = 30;
 const HISTORY_PAGE = 30;
@@ -32,7 +33,7 @@ const CHAT_BODY = `
     <span id="chatTitle" class="chat-title" title="Click to rename">New chat</span>
   </div>
   <button class="icon-btn" id="newChat" title="New chat"><svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
-  <div style="position:relative;display:inline-block">
+  <div class="export-btn-wrap">
     <button class="icon-btn" id="exportBtn" title="Export chat"><svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>
     <div id="exportMenu" class="export-menu">
       <button class="export-menu-item" data-format="markdown">Export as Markdown</button>
@@ -120,7 +121,8 @@ export class ChatView implements vscode.WebviewViewProvider {
         private client: OpenAIClient,
         private registry: ToolRegistry,
         private auth: AuthService,
-        private modelsService: ModelsService
+        private modelsService: ModelsService,
+        private memory?: MemoryStore
     ) {
         this.chats = new ChatStore(ctx);
         this.activeChat = this.chats.active();
@@ -177,18 +179,9 @@ export class ChatView implements vscode.WebviewViewProvider {
                 "agent.parallelTools": c.get("agent.parallelTools", true),
                 "agent.toolCache": c.get("agent.toolCache", true),
                 "chat.persistHistory": c.get("chat.persistHistory", true),
-                "approval.write": c.get("approval.write", "ask"),
-                "approval.delete": c.get("approval.delete", "ask"),
-                "approval.rename": c.get("approval.rename", "ask"),
-                "approval.shell": c.get("approval.shell", "ask"),
-                "approval.vscodeCommand": c.get(
-                    "approval.vscodeCommand",
-                    "ask"
-                ),
-                "approval.web": c.get("approval.web", "ask"),
                 "agent.customSystemPrompt": c.get("agent.customSystemPrompt", ""),
                 "agent.personalization": c.get("agent.personalization", false),
-                "agent.disabledTools": c.get("agent.disabledTools", []),
+                "agent.toolPolicy": settings().toolPolicy,
             },
         });
     }
@@ -601,6 +594,14 @@ export class ChatView implements vscode.WebviewViewProvider {
         text: string,
         mode: "chat" | "agent"
     ): Promise<void> {
+        // Handle slash commands locally
+        const slashResult = await this.handleSlashCommand(text);
+        if (slashResult !== null) {
+            if (slashResult) this.post({ type: "token", text: slashResult });
+            this.post({ type: "done" });
+            return;
+        }
+
         await this.ensureActiveChat();
 
         if (this.isRunning) {
@@ -628,6 +629,88 @@ export class ChatView implements vscode.WebviewViewProvider {
         }
     }
 
+    /** Returns null if not a slash command, otherwise the response text */
+    private async handleSlashCommand(text: string): Promise<string | null> {
+        const t = text.trim();
+        if (!t.startsWith("/")) return null;
+        const parts = t.split(/\s+/);
+        const cmd = parts[0].toLowerCase();
+        const arg = parts.slice(1).join(" ");
+
+        switch (cmd) {
+            case "/clear":
+                await this.newChat();
+                return "";
+            case "/model":
+                if (arg) {
+                    await updateSetting("chatModel", arg);
+                    this.pushModel();
+                    return `Model set to: ${arg}`;
+                }
+                return `Current model: ${settings().chatModel}`;
+            case "/export":
+                await this.exportChat(arg === "json" ? "json" : "markdown");
+                return "";
+            case "/memory":
+                if (!this.memory) return "Memory not available.";
+                if (arg.startsWith("set ")) {
+                    const m = arg.slice(4).match(/^(\S+)\s+(.+)$/s);
+                    if (m) { await this.memory.set(m[1], m[2]); return `Stored: ${m[1]}`; }
+                    return "Usage: /memory set <key> <value>";
+                }
+                if (arg.startsWith("get ")) {
+                    const v = this.memory.get(arg.slice(4).trim());
+                    return v ?? "Not found.";
+                }
+                if (arg.startsWith("delete ")) {
+                    const ok = await this.memory.delete(arg.slice(7).trim());
+                    return ok ? "Deleted." : "Not found.";
+                }
+                if (arg === "clear") {
+                    await this.memory.clear();
+                    return "All memories cleared.";
+                }
+                // list
+                const entries = this.memory.list();
+                if (!entries.length) return "No memories stored.";
+                return entries.map(e => `**${e.key}**: ${e.value}`).join("\n");
+            case "/agent":
+                return "Toggle agent mode with the \u26A1 button, or start a message normally.";
+            case "/help":
+                return [
+                    "**Slash commands:**",
+                    "`/clear` — new chat",
+                    "`/model [name]` — show/set model",
+                    "`/export [md|json]` — export chat",
+                    "`/memory` — list memories",
+                    "`/memory set <key> <value>` — store",
+                    "`/memory get <key>` — retrieve",
+                    "`/memory delete <key>` — remove",
+                    "`/memory clear` — wipe all",
+                    "`/help` — this list",
+                ].join("\n");
+            default:
+                return null; // Not a known command — send to LLM
+        }
+    }
+
+    /** Read .onlysq rules file if it exists */
+    private async readRulesFile(): Promise<string> {
+        try {
+            const folders = vscode.workspace.workspaceFolders;
+            if (!folders?.length) return "";
+            for (const name of [".onlysq", ".onlysq-rules", ".onlysq.md"]) {
+                const uri = vscode.Uri.joinPath(folders[0].uri, name);
+                try {
+                    const data = await vscode.workspace.fs.readFile(uri);
+                    const text = Buffer.from(data).toString("utf-8").trim();
+                    if (text) return `\n\n--- Project Rules (${name}) ---\n${text}`;
+                } catch { /* file doesn't exist */ }
+            }
+        } catch { /* */ }
+        return "";
+    }
+
     private async runChatMode(
         text: string,
         signal: AbortSignal
@@ -636,12 +719,14 @@ export class ChatView implements vscode.WebviewViewProvider {
         const userContent = ctx
             ? `${text}\n\n---\n**Editor context:**\n${ctx}`
             : text;
+        const rules = await this.readRulesFile();
+        const memCtx = this.memory?.toContext() ?? "";
         const systemPrompt = `You are OnlySq CLI, a coding assistant inside VS Code.
     - Answer in Markdown with fenced code blocks (\`\`\`lang).
     - Be concise. Prefer code over prose when code is the answer.
     
     --- System context ---
-    ${systemBriefForLLM()}`;
+    ${systemBriefForLLM()}${rules}${memCtx}`;
 
         const cleanHistory = sanitizeHistoryForApi(this.history);
         const messages: ChatMessage[] = [
@@ -670,6 +755,9 @@ export class ChatView implements vscode.WebviewViewProvider {
         this.updateHistoryAfterTurn();
         await this.persistActive();
         this.pushChatList();
+        if (this.activeChat && this.activeChat.title === "New chat") {
+            void this.generateAutoTitle(text).catch(() => {});
+        }
     }
 
     private async runAgentMode(
@@ -678,7 +766,10 @@ export class ChatView implements vscode.WebviewViewProvider {
     ): Promise<void> {
         const ctx = await editorContextSnippet();
         const goal = ctx ? `${text}\n\n---\n**Editor context:**\n${ctx}` : text;
+        const rules = await this.readRulesFile();
+        const memCtx = this.memory?.toContext() ?? "";
         const cleanHistory = sanitizeHistoryForApi(this.history);
+        let stepNum = 0;
         const updated = await runAgent(
             this.client,
             this.registry,
@@ -716,6 +807,9 @@ export class ChatView implements vscode.WebviewViewProvider {
                     case "pause":
                         this.setPaused(true, e.reason);
                         break;
+                    case "step":
+                        this.post({ type: "step", step: e.step, maxSteps: e.maxSteps });
+                        break;
                     case "done":
                         this.post({ type: "done", reason: e.reason });
                         break;
@@ -734,13 +828,18 @@ export class ChatView implements vscode.WebviewViewProvider {
                     const msgs = this.liveMessages.splice(0);
                     return msgs;
                 },
-            }
+            },
+            rules + memCtx,
         );
         this.liveMessages = [];
         if (this.activeChat) this.activeChat.messages = updated;
         this.updateHistoryAfterTurn();
         await this.persistActive();
         this.pushChatList();
+        // Auto-title via LLM if first message
+        if (this.activeChat && this.activeChat.title === "New chat") {
+            void this.generateAutoTitle(text).catch(() => {});
+        }
     }
 
     private updateHistoryAfterTurn(): void {
@@ -816,6 +915,31 @@ export class ChatView implements vscode.WebviewViewProvider {
 
     private post(msg: any): void {
         this.view?.webview.postMessage(msg);
+    }
+
+    private async generateAutoTitle(firstMessage: string): Promise<void> {
+        if (!this.activeChat) return;
+        try {
+            const messages: ChatMessage[] = [
+                { role: "system", content: "Generate a short chat title (3-6 words, no quotes) for this conversation. Reply with ONLY the title." },
+                { role: "user", content: firstMessage.slice(0, 500) },
+            ];
+            let title = "";
+            for await (const d of this.client.stream({
+                model: settings().chatModel,
+                temperature: 0.3,
+                max_tokens: 20,
+                messages,
+            })) {
+                if (d.content) title += d.content;
+            }
+            title = title.replace(/["']/g, "").trim();
+            if (title && title.length > 2 && title.length < 60 && this.activeChat) {
+                this.activeChat.title = title;
+                await this.chats.rename(this.activeChat.id, title);
+                this.pushChatList();
+            }
+        } catch { /* ignore auto-title failures */ }
     }
 
     private async exportChat(format: "markdown" | "json"): Promise<void> {

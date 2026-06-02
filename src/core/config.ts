@@ -35,7 +35,28 @@ export const STORAGE_KEYS = {
     sessionUsage: "onlysq.sessionUsage",
 } as const;
 
-export type ApprovalMode = "always" | "never" | "ask";
+export type ToolPolicy = "always" | "ask" | "never" | "disabled";
+
+/** Default policies per tool */
+export const TOOL_DEFAULTS: Record<string, ToolPolicy> = {
+    // Read-only / safe
+    pause_agent: "always", ask_user: "always", read_file: "always",
+    list_dir: "always", list_tree: "always", search: "always",
+    find_files: "always", file_info: "always", find_in_file: "always",
+    open_file: "always", goto_position: "always", get_cursor: "always",
+    get_selection: "always", list_open_files: "always", get_diagnostics: "always",
+    list_tasks: "always", git_status: "always", git_diff: "always",
+    workspace_info: "always", system_info: "always", delegate: "always",
+    add_memory: "always", get_memory: "always", view_memories: "always", delete_memory: "always",
+    // Write
+    propose_edit: "ask", apply_at_line: "ask", replace_in_file: "ask",
+    patch_file: "ask", delete_file: "ask", rename_file: "ask",
+    // Shell / commands
+    run_command: "ask", run_command_interactive: "ask", run_task: "ask",
+    run_vscode_command: "ask", open_in_browser: "ask", git_commit: "ask",
+    // Web
+    fetch_url: "ask", web_search: "ask", scrape_page: "ask",
+};
 
 export interface Settings {
     chatModel: string;
@@ -46,28 +67,25 @@ export interface Settings {
     contextLinesAfter: number;
     temperature: number;
     maxAgentSteps: number;
-    approval: {
-        write: ApprovalMode;
-        delete: ApprovalMode;
-        rename: ApprovalMode;
-        shell: ApprovalMode;
-        vscodeCommand: ApprovalMode;
-        web: ApprovalMode;
-    };
+    toolPolicy: Record<string, ToolPolicy>;
     parallelTools: boolean;
     toolCache: boolean;
     persistHistory: boolean;
     customSystemPrompt: string;
     personalization: boolean;
-    disabledTools: string[];
 }
 
 export function settings(): Settings {
     const c = vscode.workspace.getConfiguration("onlysq");
-    const ap = (key: string, def: ApprovalMode): ApprovalMode => {
-        const v = c.get<string>(`approval.${key}`, def);
-        return v === "always" || v === "never" || v === "ask" ? v : def;
-    };
+    // Per-tool policy: merge defaults with user overrides
+    const overrides = c.get<Record<string, string>>("agent.toolPolicy", {});
+    const toolPolicy: Record<string, ToolPolicy> = { ...TOOL_DEFAULTS };
+    for (const [name, val] of Object.entries(overrides)) {
+        if (val === "always" || val === "ask" || val === "never" || val === "disabled") {
+            toolPolicy[name] = val;
+        }
+    }
+
     return {
         chatModel: c.get("chatModel", "gpt-4o-mini"),
         completionModel: c.get("completionModel", "gpt-4o-mini"),
@@ -77,20 +95,12 @@ export function settings(): Settings {
         contextLinesAfter: c.get("inlineCompletions.linesAfter", 40),
         temperature: c.get("temperature", 0.3),
         maxAgentSteps: c.get("agent.maxSteps", 50),
-        approval: {
-            write: ap("write", "ask"),
-            delete: ap("delete", "ask"),
-            rename: ap("rename", "ask"),
-            shell: ap("shell", "ask"),
-            vscodeCommand: ap("vscodeCommand", "ask"),
-            web: ap("web", "ask"),
-        },
+        toolPolicy,
         parallelTools: c.get("agent.parallelTools", true),
         toolCache: c.get("agent.toolCache", true),
         persistHistory: c.get("chat.persistHistory", true),
         customSystemPrompt: c.get("agent.customSystemPrompt", ""),
         personalization: c.get("agent.personalization", false),
-        disabledTools: c.get<string[]>("agent.disabledTools", []),
     };
 }
 

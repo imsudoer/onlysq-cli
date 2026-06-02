@@ -105,7 +105,7 @@ export async function applyProposal(id: string): Promise<boolean> {
     const rel = p.path.replace(/^\/+/, "");
     await writeText(rel, p.newContent);
     p.state = "applied";
-    provider.set(p.leftUri, p.newContent);
+    // Don't overwrite leftUri — keep original content so View diff still shows before/after
     return true;
 }
 
