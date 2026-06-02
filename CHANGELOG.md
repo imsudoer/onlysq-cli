@@ -11,3 +11,7 @@
 ## 0.1.6
 
 -   Added smooth scroll, etc.
+
+## 0.1.7
+
+-   New fileedit tool, smoother animations, scroll fix

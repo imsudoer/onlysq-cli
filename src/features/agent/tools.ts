@@ -34,6 +34,10 @@ import { listTasks, runTaskByName } from "../../services/workspace/tasks";
 import { systemInfo } from "../../core/systemInfo";
 import { askApproval } from "./approval";
 import { settings } from "../../core/config";
+import {
+    previewReplaceInFile,
+    ReplaceOp,
+} from "../../services/workspace/replaceInFile";
 
 const obj = (props: Record<string, any>, required: string[] = []) => ({
     type: "object",
@@ -79,8 +83,8 @@ export const builtinTools: ToolHandler[] = [
                 name: "read_file",
                 description:
                     'Read a UTF-8 file with line numbers (1-based). Lines are formatted as "  42 | source code". ' +
-                    "For large files, use start_line / end_line to read a specific range. " +
-                    "Always prefer reading a focused range before editing.",
+                    "Line endings (CRLF/LF) are handled automatically — provide expected_lines without trailing carriage returns. " +
+                    "For large files, use start_line / end_line to read a specific range.",
                 parameters: obj(
                     {
                         path: str("Workspace-relative path"),
@@ -106,7 +110,7 @@ export const builtinTools: ToolHandler[] = [
                 start: start_line,
                 end: end_line,
             });
-            let header = `File: ${path}\nTotal lines: ${r.totalLines}`;
+            let header = `File: ${path}\nTotal lines: ${r.totalLines}\nLine endings: ${r.eol}`;
             if (r.truncated) header += " (file truncated at 200KB)";
             if (start_line || end_line)
                 header += `\nShowing lines ${r.rangeStart}-${r.rangeEnd}`;
@@ -393,6 +397,124 @@ export const builtinTools: ToolHandler[] = [
                     a.reason ? String(a.reason) : undefined,
                     `${edit.mode} at line ${edit.startLine}`
                 );
+            } catch (e: any) {
+                return `Error: ${e?.message ?? e}`;
+            }
+        },
+    },
+
+    {
+        def: {
+            type: "function",
+            function: {
+                name: "replace_in_file",
+                description:
+                    "Find-and-replace exact strings inside a file. Most reliable tool for targeted edits — " +
+                    "use this instead of apply_at_line/patch_file when you can quote the EXACT current text. " +
+                    "Each operation: find the literal string, replace it with new text. By default replaces ALL occurrences; " +
+                    "set count to limit. Multi-line strings are supported. Line endings (CRLF/LF) are normalized — write \\n in your strings. " +
+                    'If any "find" does not appear in the file, the whole operation FAILS and reports which ones — read the file again and adjust.',
+                parameters: obj(
+                    {
+                        path: str("Workspace-relative path"),
+                        operations: {
+                            type: "array",
+                            description:
+                                "List of find/replace operations applied in order to the running content.",
+                            items: obj(
+                                {
+                                    find: str(
+                                        "Exact string to find (literal, not regex). Can be multi-line."
+                                    ),
+                                    replace: str(
+                                        "Replacement string. Can be multi-line."
+                                    ),
+                                    count: num(
+                                        "Optional. Max replacements for this operation (default: all)."
+                                    ),
+                                },
+                                ["find", "replace"]
+                            ),
+                        },
+                        reason: str("Short summary shown to the user"),
+                        allow_partial: {
+                            type: "boolean",
+                            description:
+                                "If true, succeeds even when some operations did not match. Default false.",
+                        },
+                    },
+                    ["path", "operations"]
+                ),
+            },
+        },
+        run: async (a: any, ctx) => {
+            try {
+                const ops: ReplaceOp[] = Array.isArray(a.operations)
+                    ? a.operations
+                    : [];
+                if (!ops.length)
+                    return "Error: operations must be a non-empty array";
+                for (let i = 0; i < ops.length; i++) {
+                    if (typeof ops[i]?.find !== "string")
+                        return `Error: operations[${i}].find must be a string`;
+                    if (typeof ops[i]?.replace !== "string")
+                        return `Error: operations[${i}].replace must be a string`;
+                }
+
+                const result = await previewReplaceInFile(String(a.path), ops);
+
+                if (result.notFound.length && !a.allow_partial) {
+                    const lines = result.notFound.map((nf) => {
+                        const preview =
+                            nf.find.length > 200
+                                ? nf.find.slice(0, 200) + "…"
+                                : nf.find;
+                        return `  [${nf.index}] not found: ${JSON.stringify(
+                            preview
+                        )}`;
+                    });
+                    return (
+                        `Error: ${result.notFound.length}/${ops.length} operations did not match. The file was NOT changed.\n` +
+                        lines.join("\n") +
+                        `\n\nRe-read the file to verify exact whitespace, indentation, and line endings. ` +
+                        `Or pass allow_partial=true to apply only the matching ones.`
+                    );
+                }
+
+                if (result.totalApplied === 0) {
+                    return `Error: no operations matched. The file was NOT changed.`;
+                }
+
+                const proposal = await createProposal({
+                    id: ctx.callId,
+                    path: String(a.path),
+                    newContent: result.proposed,
+                    reason: a.reason
+                        ? String(a.reason)
+                        : `Replace ${result.totalApplied} occurrence(s) in ${ops.length} op(s)`,
+                });
+
+                const summaryLines = [
+                    `Replace in ${a.path}: ${result.totalApplied} replacement(s) across ${result.applied.length}/${ops.length} operation(s).`,
+                ];
+                for (const op of result.applied) {
+                    summaryLines.push(
+                        `  [${op.index}] ${op.appliedCount}/${op.matchCount} replaced`
+                    );
+                }
+                if (result.notFound.length) {
+                    summaryLines.push(
+                        `  ${result.notFound.length} operation(s) skipped (no match)`
+                    );
+                }
+
+                const finalNote = await finalizeEditProposal(
+                    proposal.id,
+                    String(a.path),
+                    a.reason ? String(a.reason) : undefined,
+                    "Replace"
+                );
+                return summaryLines.join("\n") + "\n\n" + finalNote;
             } catch (e: any) {
                 return `Error: ${e?.message ?? e}`;
             }

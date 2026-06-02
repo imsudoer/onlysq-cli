@@ -823,6 +823,14 @@
         "propose_edit",
         "apply_at_line",
         "patch_file",
+        "replace_in_file",
+        "find_in_file",
+    ]);
+    const EDIT_TOOLS = new Set([
+        "propose_edit",
+        "apply_at_line",
+        "patch_file",
+        "replace_in_file",
     ]);
     const TOOL_LABELS = {
         read_file: "Reading",
@@ -830,8 +838,11 @@
         propose_edit: "Editing",
         apply_at_line: "Editing",
         patch_file: "Patching",
+        replace_in_file: "Editing",
+        find_in_file: "Searching",
         open_file: "Opening",
         list_dir: "Listing",
+        list_tree: "Listing",
         search: "Searching",
         get_selection: "Reading selection",
         run_command: "Running",
@@ -849,11 +860,19 @@
                         (args.end_line ? `-${args.end_line}` : "");
                     return `${args.path}:${r}`;
                 }
+                if (name === "replace_in_file") {
+                    const ops = Array.isArray(args.operations)
+                        ? args.operations.length
+                        : 0;
+                    return `${args.path} (${ops} op${ops === 1 ? "" : "s"})`;
+                }
                 return args.path;
             }
             if (name === "list_dir") return (args && args.path) || ".";
             if (name === "search")
                 return "/" + ((args && args.pattern) || "") + "/";
+            if (name === "find_in_file")
+                return `${args?.path || ""} /${args?.pattern || ""}/`;
             if (name === "get_selection") return "(active editor)";
             const s = JSON.stringify(args);
             return s.length > 80 ? s.slice(0, 80) + "…" : s;
@@ -861,6 +880,7 @@
             return "";
         }
     }
+
     function describeTool(name, args) {
         const verb = TOOL_LABELS[name] || name;
         if (FILE_TOOLS.has(name) && args && args.path)
@@ -895,16 +915,12 @@
             "</span>" +
             '<span class="tarrow">▶</span>';
 
-        const body = el("div", "tool-body", block);
-
         if (args && typeof args.reason === "string" && args.reason.trim()) {
-            const reasonBlock = el("div", "", body);
-            reasonBlock.innerHTML =
-                '<div class="tlabel">Description</div>' +
-                '<div class="treason"></div>';
-            reasonBlock.querySelector(".treason").textContent = args.reason;
+            const reasonLine = el("div", "tool-reason", block);
+            reasonLine.textContent = args.reason.trim();
         }
 
+        const body = el("div", "tool-body", block);
         const argsBlock = el("div", "", body);
         argsBlock.innerHTML =
             '<div class="tlabel">Arguments</div>' +
@@ -917,11 +933,9 @@
         toolBlocks.set(id, block);
         showStatusPill(describeTool(name, args));
         scrollToBottom();
-        // if (name === 'propose_edit') block.classList.add('open');
         return block;
     }
 
-    const EDIT_TOOLS = new Set(["propose_edit", "apply_at_line", "patch_file"]);
     function setToolResult(id, name, args, result) {
         const block = toolBlocks.get(id);
         if (!block) return;

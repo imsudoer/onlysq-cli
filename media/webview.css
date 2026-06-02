@@ -367,13 +367,24 @@ button.icon-btn.on {
     white-space: pre-wrap;
     word-break: break-all;
 }
-.tool-body .treason {
+.tool-reason {
+    padding: 4px 10px 6px;
+    font-size: 12px;
+    line-height: 1.45;
     color: var(--fg);
+    border-top: 1px solid var(--border-soft);
+    font-family: var(--vscode-font-family);
     white-space: pre-wrap;
-    margin-bottom: 8px;
-    line-height: 1.5;
+    word-wrap: break-word;
     user-select: text;
     -webkit-user-select: text;
+    cursor: text;
+}
+.tool-block .tool-reason:first-of-type {
+    margin-top: 0;
+}
+.tool-body .treason {
+    display: none;
 }
 .tool-body .tresult {
     color: var(--fg);
