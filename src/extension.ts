@@ -20,6 +20,7 @@ import {
     hasProjectContext,
     projectContextPath,
 } from "./services/workspace/projectContext";
+import { McpManager } from "./services/mcp/mcpManager";
 
 export async function activate(ctx: vscode.ExtensionContext) {
     Logger.init("OnlySq CLI");
@@ -38,11 +39,30 @@ export async function activate(ctx: vscode.ExtensionContext) {
     setMemoryStore(memory);
     initAgentTasksStore(ctx.workspaceState);
 
+    const mcp = new McpManager(registry);
+    ctx.subscriptions.push({ dispose: () => { void mcp.dispose(); } });
+    void mcp.start().catch((e) => Logger.error("[mcp] start failed", e));
+
+    // Hot reload on config change
+    const mcpWatcher = vscode.workspace.createFileSystemWatcher("**/.onlysq/mcp.json");
+    let mcpReloadTimer: NodeJS.Timeout | undefined;
+    const scheduleMcpReload = () => {
+        if (mcpReloadTimer) clearTimeout(mcpReloadTimer);
+        mcpReloadTimer = setTimeout(() => {
+            Logger.log("[mcp] config changed, reloading");
+            void mcp.restart();
+        }, 500);
+    };
+    mcpWatcher.onDidChange(scheduleMcpReload);
+    mcpWatcher.onDidCreate(scheduleMcpReload);
+    mcpWatcher.onDidDelete(scheduleMcpReload);
+    ctx.subscriptions.push(mcpWatcher);
+
     registerDiffProvider(ctx);
 
     const usage = new UsageTracker(ctx);
     const client = new OpenAIClient(auth, usage);
-    const chat = new ChatView(ctx, client, registry, auth, modelsService, memory);
+    const chat = new ChatView(ctx, client, registry, auth, modelsService, memory, mcp);
 
     const status = new StatusBar(auth, usage);
 
@@ -198,6 +218,38 @@ export async function activate(ctx: vscode.ExtensionContext) {
     cmd("onlysq.newChat", async () => {
         chat.focus();
         await chat.newChat();
+    });
+
+    cmd("onlysq.mcp.reload", async () => {
+        vscode.window.showInformationMessage("OnlySq MCP: reloading servers\u2026");
+        await mcp.restart();
+        const states = mcp.states();
+        const ok = states.filter((s) => s.status === "ready").length;
+        const err = states.filter((s) => s.status === "error").length;
+        const total = states.length;
+        vscode.window.showInformationMessage(`OnlySq MCP: ${ok}/${total} ready${err ? `, ${err} failed` : ""}`);
+    });
+
+    cmd("onlysq.mcp.editConfig", async () => {
+        const p = await mcp.ensureConfigExists();
+        const doc = await vscode.workspace.openTextDocument(p);
+        await vscode.window.showTextDocument(doc);
+    });
+
+    cmd("onlysq.mcp.status", () => {
+        const states = mcp.states();
+        if (!states.length) {
+            vscode.window.showInformationMessage("OnlySq MCP: no servers configured. Run 'OnlySq: MCP \u2014 Edit Config' to add one.");
+            return;
+        }
+        const lines = states.map((s) => {
+            const tools = s.toolCount > 0 ? ` \u2014 ${s.toolCount} tool(s)` : "";
+            const err = s.error ? ` (${s.error.slice(0, 80)})` : "";
+            return `\u2022 ${s.name}: ${s.status}${tools}${err}`;
+        });
+        Logger.log("[mcp] status:\n" + lines.join("\n"));
+        Logger.show();
+        vscode.window.showInformationMessage(`MCP: ${lines.length} server(s). See log for details.`);
     });
 
     if (await auth.isSignedIn()) {

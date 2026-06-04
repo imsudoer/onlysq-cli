@@ -2,7 +2,7 @@
     "name": "onlysq-cli",
     "displayName": "OnlySq CLI",
     "description": "AI coding assistant by OnlySq — inline completions, chat, and agent mode with native diff previews",
-    "version": "0.2.231",
+    "version": "0.2.232",
     "publisher": "subashev",
     "repository": {
         "type": "git",
@@ -99,6 +99,21 @@
             {
                 "command": "onlysq.initProjectContext",
                 "title": "Initialize Project Context",
+                "category": "OnlySq"
+            },
+            {
+                "command": "onlysq.mcp.reload",
+                "title": "MCP \u2014 Reload Servers",
+                "category": "OnlySq"
+            },
+            {
+                "command": "onlysq.mcp.editConfig",
+                "title": "MCP \u2014 Edit Config",
+                "category": "OnlySq"
+            },
+            {
+                "command": "onlysq.mcp.status",
+                "title": "MCP \u2014 Status",
                 "category": "OnlySq"
             }
         ],
@@ -255,5 +270,8 @@
         "esbuild": "^0.24.0",
         "npm-run-all": "^4.1.5",
         "typescript": "^5.4.0"
+    },
+    "dependencies": {
+        "@modelcontextprotocol/sdk": "^1.29.0"
     }
 }

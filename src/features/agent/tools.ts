@@ -30,6 +30,8 @@ import {
     readFromSession,
     closeSession,
     listSessions,
+    showSession,
+    peekSession,
 } from "../../services/workspace/terminalSession";
 import {
     executeShell,
@@ -1087,15 +1089,16 @@ export const builtinTools: ToolHandler[] = [
                     {
                         action: {
                             type: "string",
-                            enum: ["open", "write", "read", "close", "list"],
-                            description: "What to do",
+                            enum: ["open", "write", "read", "close", "list", "show", "peek"],
+                            description: "What to do. 'peek' shows current buffer without clearing it.",
                         },
-                        id: str("Session id (required for write/read/close)"),
+                        id: str("Session id (required for write/read/close/show)"),
                         cwd: str("Working directory (open action only, optional, relative to workspace)"),
                         text: str("Text/command to send to stdin (write action). Newline appended automatically."),
                         command: str("Alias for `text` (write action)"),
                         wait_ms: num("How long to wait before returning output, default 1000, max 30000 (read action only)"),
                         clear: { type: "boolean", description: "Clear buffer after read? Default true (read action only)" },
+                        show: { type: "boolean", description: "Show the terminal panel after opening? Default true (open action only)" },
                     },
                     ["action"]
                 ),
@@ -1108,8 +1111,16 @@ export const builtinTools: ToolHandler[] = [
                     if (!(await askToolApproval("terminal", `Open shell session${a.cwd ? " in " + a.cwd : ""}?`))) {
                         return "User denied terminal session";
                     }
-                    const s = openSession({ cwd: a.cwd ? String(a.cwd) : undefined });
+                    const s = openSession({
+                        cwd: a.cwd ? String(a.cwd) : undefined,
+                        show: a.show !== false,
+                    });
                     return `Opened session ${s.id}\nShell: ${s.shell}\nCwd: ${s.cwd}`;
+                }
+                if (action === "show") {
+                    if (!a.id) return "Error: id is required for show";
+                    const ok = showSession(String(a.id));
+                    return ok ? `Revealed ${a.id}` : `Session ${a.id} not found`;
                 }
                 if (action === "write") {
                     if (!a.id) return "Error: id is required for write";
@@ -1127,7 +1138,21 @@ export const builtinTools: ToolHandler[] = [
                     const clear = a.clear !== false;
                     const r = await readFromSession(String(a.id), { waitMs, clear });
                     const head = `Session ${a.id}${r.closed ? ` (closed, exit ${r.exitCode})` : ""} \u2014 ${r.output.length} bytes\n---`;
-                    return r.output.length ? `${head}\n${r.output}` : `${head}\n(no new output)`;
+                    let body = r.output.length ? `${head}\n${r.output}` : `${head}\n(no new output)`;
+                    if (r.userInputSinceLastRead) {
+                        body += `\n\n[USER TYPED in terminal since last read]:\n${r.userInputSinceLastRead}`;
+                    }
+                    return body;
+                }
+                if (action === "peek") {
+                    if (!a.id) return "Error: id is required for peek";
+                    const p = peekSession(String(a.id));
+                    if (!p) return `Session ${a.id} not found`;
+                    let body = `Session ${a.id}${p.closed ? ` (closed, exit ${p.exitCode})` : " (running)"} \u2014 buffer ${p.output.length} bytes (not cleared)\n---\n${p.output || "(empty)"}`;
+                    if (p.userInputBuffer) {
+                        body += `\n\n[USER TYPED in terminal]:\n${p.userInputBuffer}`;
+                    }
+                    return body;
                 }
                 if (action === "close") {
                     if (!a.id) return "Error: id is required for close";
@@ -1137,9 +1162,12 @@ export const builtinTools: ToolHandler[] = [
                 if (action === "list") {
                     const arr = listSessions();
                     if (!arr.length) return "(no open sessions)";
-                    return arr.map((s) => `${s.id}  ${s.shell}  cwd=${s.cwd}  ${s.closed ? `closed(exit ${s.exitCode})` : "running"}  buf=${s.bufferBytes}b  age=${Math.round(s.ageMs / 1000)}s`).join("\n");
+                    return arr.map((s) => {
+                        const uTag = s.userInputChars > 0 ? `  user-typed=${s.userInputChars}ch` : "";
+                        return `${s.id}  ${s.shell}  cwd=${s.cwd}  ${s.closed ? `closed(exit ${s.exitCode})` : "running"}  buf=${s.bufferBytes}b  age=${Math.round(s.ageMs / 1000)}s${uTag}`;
+                    }).join("\n");
                 }
-                return `Error: unknown action "${action}". Use open/write/read/close/list.`;
+                return `Error: unknown action "${action}". Use open/write/read/close/list/show/peek.`;
             } catch (e: any) {
                 return `Error: ${e?.message ?? e}`;
             }

@@ -51,6 +51,8 @@ const CHAT_BODY = `
     </div>
   </div>
   <button class="icon-btn tasks-btn" id="tasksBtn" title="Agent tasks"><svg viewBox="0 0 24 24"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg><span class="tasks-badge" id="tasksBadge" style="display:none">0</span></button>
+  <button class="icon-btn memory-btn" id="memoryBtn" title="Agent memory"><svg viewBox="0 0 24 24"><path d="M9 3a4 4 0 0 0-4 4v1.5A3.5 3.5 0 0 0 3 12a3.5 3.5 0 0 0 2 3.16V17a4 4 0 0 0 4 4 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3z"/><path d="M15 3a4 4 0 0 1 4 4v1.5A3.5 3.5 0 0 1 21 12a3.5 3.5 0 0 1-2 3.16V17a4 4 0 0 1-4 4 3 3 0 0 1-3-3V6a3 3 0 0 1 3-3z"/></svg><span class="memory-badge" id="memoryBadge" style="display:none">0</span></button>
+  <button class="icon-btn mcp-btn" id="mcpBtn" title="MCP servers"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="5" rx="1"/><rect x="3" y="11" width="18" height="5" rx="1"/><rect x="3" y="18" width="18" height="3" rx="1"/><circle cx="7" cy="6.5" r="0.6" fill="currentColor"/><circle cx="7" cy="13.5" r="0.6" fill="currentColor"/></svg><span class="mcp-badge" id="mcpBadge" style="display:none">0</span></button>
   <button class="icon-btn" id="settingsBtn" title="Settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09a1.65 1.65 0 00-1.08-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09a1.65 1.65 0 001.51-1.08 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001.08 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1.08z"/></svg></button>
 </div>
 
@@ -73,6 +75,49 @@ const CHAT_BODY = `
     <input type="text" id="tasksAddInput" placeholder="New task… (Enter to add, Esc to cancel)" />
   </div>
   <div id="tasksBody" class="tasks-body"><div class="tasks-empty">No tasks yet.</div></div>
+</div>
+
+<div id="mcpPanel" class="mcp-panel" style="display:none">
+  <div class="mcp-head">
+    <span class="mcp-title">MCP servers</span>
+    <button class="icon-btn" id="mcpAddBtn" title="Add server"><svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
+    <button class="icon-btn" id="mcpReloadBtn" title="Reload all"><svg viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></button>
+    <button class="btn ghost small" id="mcpEditBtn" title="Edit JSON config">Edit</button>
+    <button class="icon-btn" id="mcpCloseBtn" title="Close"><svg viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+  </div>
+  <div id="mcpAddRow" class="mcp-add-row" style="display:none">
+    <input type="text" id="mcpAddName" placeholder="server-name (a-z, 0-9, _, -)" />
+    <input type="text" id="mcpAddCommand" placeholder="command (e.g. npx)" />
+    <input type="text" id="mcpAddArgs" placeholder="args separated by spaces, e.g. -y @modelcontextprotocol/server-filesystem ." />
+    <textarea id="mcpAddEnv" rows="2" placeholder="env vars (one per line: KEY=value), optional"></textarea>
+    <div class="mcp-add-actions">
+      <button class="btn primary small" id="mcpAddSave">Add</button>
+      <button class="btn ghost small" id="mcpAddCancel">Cancel</button>
+    </div>
+    <div id="mcpAddError" class="mcp-add-error" style="display:none"></div>
+  </div>
+  <div id="mcpBody" class="mcp-body"><div class="mcp-empty">No MCP servers configured.</div></div>
+</div>
+
+<div id="memoryPanel" class="memory-panel" style="display:none">
+  <div class="memory-head">
+    <span class="memory-title">Agent memory</span>
+    <button class="icon-btn" id="memoryAddBtn" title="Add memory"><svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
+    <button class="btn ghost small" id="memoryClearBtn" title="Clear all">Clear</button>
+    <button class="icon-btn" id="memoryCloseBtn" title="Close"><svg viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+  </div>
+  <div id="memorySearchRow" class="memory-search-row">
+    <input type="text" id="memorySearchInput" placeholder="Search by key or value…" />
+  </div>
+  <div id="memoryAddRow" class="memory-add-row" style="display:none">
+    <input type="text" id="memoryAddKey" placeholder="key" />
+    <textarea id="memoryAddValue" rows="2" placeholder="value (Ctrl+Enter to save, Esc to cancel)"></textarea>
+    <div class="memory-add-actions">
+      <button class="btn primary small" id="memoryAddSave">Save</button>
+      <button class="btn ghost small" id="memoryAddCancel">Cancel</button>
+    </div>
+  </div>
+  <div id="memoryBody" class="memory-body"><div class="memory-empty">No memories yet.</div></div>
 </div>
 
 <div id="settingsPanel" class="settings-panel" style="display:none">
@@ -158,7 +203,8 @@ export class ChatView implements vscode.WebviewViewProvider {
         private registry: ToolRegistry,
         private auth: AuthService,
         private modelsService: ModelsService,
-        private memory?: MemoryStore
+        private memory?: MemoryStore,
+        private mcp?: import("../services/mcp/mcpManager").McpManager
     ) {
         this.chats = new ChatStore(ctx);
         this.activeChat = this.chats.active();
@@ -192,6 +238,22 @@ export class ChatView implements vscode.WebviewViewProvider {
         this.view.webview.postMessage({
             type: "tasks",
             tasks: getAgentTasks(),
+        });
+    }
+
+    private pushMemories(): void {
+        if (!this.view || !this.memory) return;
+        this.view.webview.postMessage({
+            type: "memories",
+            memories: this.memory.list(),
+        });
+    }
+
+    private pushMcpServers(): void {
+        if (!this.view) return;
+        this.view.webview.postMessage({
+            type: "mcpServers",
+            servers: this.mcp ? this.mcp.states() : [],
         });
     }
 
@@ -273,6 +335,16 @@ export class ChatView implements vscode.WebviewViewProvider {
         const unsubTasks = onAgentTasksChange(() => this.pushTasks());
         this.subs.push({ dispose: unsubTasks });
         this.pushTasks();
+        if (this.memory) {
+            const subMem = this.memory.onChange(() => this.pushMemories());
+            this.subs.push(subMem);
+            this.pushMemories();
+        }
+        if (this.mcp) {
+            const subMcp = this.mcp.onChange(() => this.pushMcpServers());
+            this.subs.push(subMcp);
+            this.pushMcpServers();
+        }
         const unsubEdit = onEditResultEvent((id, state) => {
             this.view?.webview.postMessage({ type: "editResult", id, state });
         });
@@ -556,6 +628,85 @@ export class ChatView implements vscode.WebviewViewProvider {
             case "deleteTask":
                 if (typeof m.id === "string") {
                     deleteAgentTask(m.id);
+                }
+                return;
+
+            case "getMemories":
+                this.pushMemories();
+                return;
+
+            case "addMemory":
+                if (this.memory && typeof m.key === "string" && typeof m.value === "string" && m.key.trim()) {
+                    try { await this.memory.set(m.key.trim(), m.value); }
+                    catch (e: any) { Logger.error("[chat] addMemory", e); }
+                }
+                return;
+
+            case "editMemoryValue":
+                if (this.memory && typeof m.key === "string" && typeof m.value === "string") {
+                    try { await this.memory.set(m.key, m.value); }
+                    catch (e: any) { Logger.error("[chat] editMemoryValue", e); }
+                }
+                return;
+
+            case "renameMemory":
+                if (this.memory && typeof m.oldKey === "string" && typeof m.newKey === "string") {
+                    await this.memory.rename(m.oldKey, m.newKey);
+                }
+                return;
+
+            case "deleteMemory":
+                if (this.memory && typeof m.key === "string") {
+                    await this.memory.delete(m.key);
+                }
+                return;
+
+            case "clearMemories":
+                if (this.memory) {
+                    await this.memory.clear();
+                }
+                return;
+
+            case "getMcpServers":
+                this.pushMcpServers();
+                return;
+
+            case "mcpReloadAll":
+                if (this.mcp) await this.mcp.restart();
+                return;
+
+            case "mcpRestartOne":
+                if (this.mcp && typeof m.name === "string") await this.mcp.restartOne(m.name);
+                return;
+
+            case "mcpToggle":
+                if (this.mcp && typeof m.name === "string") await this.mcp.toggleServer(m.name);
+                return;
+
+            case "mcpRemove":
+                if (this.mcp && typeof m.name === "string") await this.mcp.removeServer(m.name);
+                return;
+
+            case "mcpAdd":
+                if (this.mcp && typeof m.name === "string" && typeof m.command === "string") {
+                    const args = Array.isArray(m.args) ? m.args.map((x: any) => String(x)) : [];
+                    const env = m.env && typeof m.env === "object" ? m.env : undefined;
+                    const res = await this.mcp.addServer(m.name, {
+                        command: m.command,
+                        args,
+                        env,
+                        cwd: typeof m.cwd === "string" ? m.cwd : undefined,
+                        disabled: !!m.disabled,
+                    });
+                    this.view?.webview.postMessage({ type: "mcpAddResult", ok: res.ok, error: res.error });
+                }
+                return;
+
+            case "mcpEditConfig":
+                if (this.mcp) {
+                    const p = await this.mcp.ensureConfigExists();
+                    const doc = await vscode.workspace.openTextDocument(p);
+                    await vscode.window.showTextDocument(doc);
                 }
                 return;
 

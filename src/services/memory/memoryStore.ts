@@ -4,8 +4,15 @@ const STORAGE_KEY = "onlysq.memory";
 const MAX_ENTRIES = 200;
 const MAX_VALUE_LEN = 10_000;
 
+export interface MemoryEntry {
+    key: string;
+    value: string;
+}
+
 export class MemoryStore {
     private data: Record<string, string>;
+    private readonly _onChange = new vscode.EventEmitter<MemoryEntry[]>();
+    readonly onChange = this._onChange.event;
 
     constructor(private ctx: vscode.ExtensionContext) {
         const raw = ctx.workspaceState.get<Record<string, string>>(STORAGE_KEY);
@@ -16,11 +23,11 @@ export class MemoryStore {
         return this.data[key];
     }
 
-    list(): Array<{ key: string; value: string }> {
+    list(): MemoryEntry[] {
         return Object.entries(this.data).map(([key, value]) => ({ key, value }));
     }
 
-    search(query: string): Array<{ key: string; value: string }> {
+    search(query: string): MemoryEntry[] {
         const q = query.toLowerCase();
         return this.list().filter(
             (e) =>
@@ -33,24 +40,44 @@ export class MemoryStore {
         if (!key.trim()) throw new Error("Key cannot be empty");
         const val = value.slice(0, MAX_VALUE_LEN);
         this.data[key.trim()] = val;
-        // Enforce max entries
         const keys = Object.keys(this.data);
         if (keys.length > MAX_ENTRIES) {
             delete this.data[keys[0]];
         }
         await this.persist();
+        this.emitChange();
+    }
+
+    async rename(oldKey: string, newKey: string): Promise<boolean> {
+        const trimmed = newKey.trim();
+        if (!trimmed) return false;
+        if (!(oldKey in this.data)) return false;
+        if (trimmed === oldKey) return true;
+        if (trimmed in this.data) return false;
+        const value = this.data[oldKey];
+        const entries = Object.entries(this.data);
+        this.data = {};
+        for (const [k, v] of entries) {
+            if (k === oldKey) this.data[trimmed] = value;
+            else this.data[k] = v;
+        }
+        await this.persist();
+        this.emitChange();
+        return true;
     }
 
     async delete(key: string): Promise<boolean> {
         if (!(key in this.data)) return false;
         delete this.data[key];
         await this.persist();
+        this.emitChange();
         return true;
     }
 
     async clear(): Promise<void> {
         this.data = {};
         await this.persist();
+        this.emitChange();
     }
 
     count(): number {
@@ -67,5 +94,9 @@ export class MemoryStore {
 
     private async persist(): Promise<void> {
         await this.ctx.workspaceState.update(STORAGE_KEY, this.data);
+    }
+
+    private emitChange(): void {
+        this._onChange.fire(this.list());
     }
 }

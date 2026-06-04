@@ -1,116 +1,256 @@
-import * as cp from "child_process";
-import * as os from "os";
-import * as path from "path";
 import * as vscode from "vscode";
+import { spawn, ChildProcessWithoutNullStreams } from "child_process";
+import * as os from "os";
 import { Logger } from "../../core/logger";
 
 export interface TerminalSession {
     id: string;
     cwd: string;
     shell: string;
-    proc: cp.ChildProcessWithoutNullStreams;
+    proc: ChildProcessWithoutNullStreams;
+    terminal: vscode.Terminal;
     buffer: string;
+    bufferBytes: number;
     closed: boolean;
     exitCode: number | null;
     createdAt: number;
+    userInputChars: number;
+    userInputBuffer: string;
+    lastUserInputAt: number;
+}
+
+export interface OpenSessionOpts {
+    cwd?: string;
+    show?: boolean;
+}
+
+export interface ReadSessionOpts {
+    waitMs?: number;
+    clear?: boolean;
+}
+
+export interface SessionInfo {
+    id: string;
+    cwd: string;
+    shell: string;
+    closed: boolean;
+    exitCode: number | null;
+    bufferBytes: number;
+    ageMs: number;
+    userInputChars: number;
+    userInputBuffer: string;
+    lastUserInputAt: number;
+}
+
+export interface ReadResult {
+    output: string;
+    closed: boolean;
+    exitCode: number | null;
+    userInputSinceLastRead?: string;
 }
 
 const sessions = new Map<string, TerminalSession>();
 let counter = 0;
 
-const MAX_BUFFER_BYTES = 256 * 1024;
-const MAX_SESSIONS = 8;
+export interface UserInputEvent {
+    sessionId: string;
+    data: string;
+    at: number;
+}
+const userInputListeners = new Set<(e: UserInputEvent) => void>();
 
-function pickShell(): { shell: string; args: string[] } {
-    const env = process.env;
-    if (process.platform === "win32") {
-        const ps = env.PSModulePath ? "powershell.exe" : "cmd.exe";
-        if (ps === "powershell.exe") {
-            return { shell: "powershell.exe", args: ["-NoLogo", "-NoProfile", "-NoExit", "-Command", "-"] };
-        }
-        return { shell: "cmd.exe", args: ["/Q", "/K"] };
-    }
-    const sh = env.SHELL || "/bin/bash";
-    return { shell: sh, args: ["-i"] };
+export function onUserInput(listener: (e: UserInputEvent) => void): () => void {
+    userInputListeners.add(listener);
+    return () => userInputListeners.delete(listener);
 }
 
-function workspaceRoot(): string {
-    const folder = vscode.workspace.workspaceFolders?.[0];
-    if (folder) return folder.uri.fsPath;
+function emitUserInput(sessionId: string, data: string): void {
+    const ev: UserInputEvent = { sessionId, data, at: Date.now() };
+    for (const l of userInputListeners) {
+        try { l(ev); } catch { /* ignore */ }
+    }
+}
+
+function defaultShell(): { cmd: string; args: string[] } {
+    if (process.platform === "win32") {
+        return { cmd: "powershell.exe", args: ["-NoLogo", "-NoExit", "-Command", "-"] };
+    }
+    const sh = process.env.SHELL || "/bin/bash";
+    return { cmd: sh, args: ["-i"] };
+}
+
+function resolveCwd(cwd?: string): string {
+    if (cwd) {
+        const folders = vscode.workspace.workspaceFolders;
+        if (folders && folders.length > 0 && !/^([a-z]:|\/|\\)/i.test(cwd)) {
+            return vscode.Uri.joinPath(folders[0].uri, cwd).fsPath;
+        }
+        return cwd;
+    }
+    const folders = vscode.workspace.workspaceFolders;
+    if (folders && folders.length > 0) return folders[0].uri.fsPath;
     return os.homedir();
 }
 
-export function openSession(opts?: { cwd?: string }): TerminalSession {
-    if (sessions.size >= MAX_SESSIONS) {
-        for (const s of sessions.values()) {
-            if (s.closed) {
-                sessions.delete(s.id);
-                break;
+function stripAnsi(s: string): string {
+    return s.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "");
+}
+
+class SessionPty implements vscode.Pseudoterminal {
+    private writeEmitter = new vscode.EventEmitter<string>();
+    private closeEmitter = new vscode.EventEmitter<number | void>();
+    readonly onDidWrite = this.writeEmitter.event;
+    readonly onDidClose = this.closeEmitter.event;
+
+    private session?: TerminalSession;
+
+    attach(session: TerminalSession): void {
+        this.session = session;
+    }
+
+    open(): void {
+        this.writeEmitter.fire(
+            `\x1b[36mOnlySq Terminal Session ${this.session?.id ?? ""}\x1b[0m\r\n` +
+                `\x1b[2mcwd: ${this.session?.cwd}\x1b[0m\r\n\r\n`
+        );
+    }
+
+    write(data: string): void {
+        this.writeEmitter.fire(data);
+    }
+
+    close(): void {
+        this.closeEmitter.fire();
+    }
+
+    fireExit(code: number): void {
+        this.closeEmitter.fire(code);
+    }
+
+    handleInput(data: string): void {
+        if (!this.session || this.session.closed) return;
+        try {
+            this.session.proc.stdin.write(data);
+            const printable = data.replace(/[\x00-\x08\x0E-\x1F\x7F]/g, "");
+            if (printable) {
+                this.session.userInputBuffer += printable;
+                this.session.userInputChars += printable.length;
+                this.session.lastUserInputAt = Date.now();
+                emitUserInput(this.session.id, printable);
             }
-        }
-        if (sessions.size >= MAX_SESSIONS) {
-            throw new Error(`Max ${MAX_SESSIONS} concurrent terminal sessions. Close some first.`);
+        } catch (e) {
+            Logger.error("[terminal] pty input write failed", e);
         }
     }
-    const cwd = opts?.cwd ? path.resolve(workspaceRoot(), opts.cwd) : workspaceRoot();
-    const { shell, args } = pickShell();
-    const id = "term-" + ++counter;
-    Logger.log(`[terminal] open ${id} shell=${shell} cwd=${cwd}`);
-    const proc = cp.spawn(shell, args, {
-        cwd,
-        env: { ...process.env, FORCE_COLOR: "0", NO_COLOR: "1" },
+}
+
+export function openSession(opts: OpenSessionOpts = {}): TerminalSession {
+    const id = "term-" + (++counter);
+    const resolvedCwd = resolveCwd(opts.cwd);
+    const { cmd, args } = defaultShell();
+
+    Logger.log(`[terminal] opening session ${id} cwd=${resolvedCwd} shell=${cmd}`);
+
+    const proc = spawn(cmd, args, {
+        cwd: resolvedCwd,
+        env: { ...process.env, FORCE_COLOR: "1" },
         windowsHide: true,
     });
+
+    const pty = new SessionPty();
+    const terminal = vscode.window.createTerminal({
+        name: `OnlySq: ${id}`,
+        pty,
+        iconPath: new vscode.ThemeIcon("terminal"),
+    } as vscode.ExtensionTerminalOptions);
+
     const session: TerminalSession = {
         id,
-        cwd,
-        shell,
+        cwd: resolvedCwd,
+        shell: cmd,
         proc,
+        terminal,
         buffer: "",
+        bufferBytes: 0,
         closed: false,
         exitCode: null,
         createdAt: Date.now(),
+        userInputChars: 0,
+        userInputBuffer: "",
+        lastUserInputAt: 0,
     };
-    const append = (chunk: Buffer): void => {
+    pty.attach(session);
+
+    const onStdout = (chunk: Buffer): void => {
         const text = chunk.toString("utf8");
-        session.buffer += text;
-        if (session.buffer.length > MAX_BUFFER_BYTES) {
-            session.buffer = "\u2026(truncated)\n" + session.buffer.slice(-MAX_BUFFER_BYTES);
-        }
+        const clean = stripAnsi(text);
+        session.buffer += clean;
+        session.bufferBytes = session.buffer.length;
+        pty.write(text.replace(/\r?\n/g, "\r\n"));
     };
-    proc.stdout.on("data", append);
-    proc.stderr.on("data", append);
+    proc.stdout.on("data", onStdout);
+    proc.stderr.on("data", onStdout);
+
     proc.on("exit", (code) => {
         session.closed = true;
         session.exitCode = code;
-        Logger.log(`[terminal] ${id} exited code=${code}`);
+        pty.write(`\r\n\x1b[33m[process exited with code ${code}]\x1b[0m\r\n`);
+        pty.fireExit(code ?? 0);
+        Logger.log(`[terminal] session ${id} exited code=${code}`);
     });
-    proc.on("error", (err) => {
-        session.buffer += `\n[spawn error] ${err.message}\n`;
+
+    proc.on("error", (e) => {
         session.closed = true;
+        pty.write(`\r\n\x1b[31m[error: ${e.message}]\x1b[0m\r\n`);
+        Logger.error(`[terminal] session ${id} error`, e);
     });
+
     sessions.set(id, session);
+    if (opts.show !== false) {
+        try { terminal.show(true); } catch { /* ignore */ }
+    }
     return session;
 }
 
-export function writeToSession(id: string, text: string): void {
+export function writeToSession(id: string, text: string): boolean {
     const s = sessions.get(id);
-    if (!s) throw new Error(`Session ${id} not found`);
-    if (s.closed) throw new Error(`Session ${id} is closed (exit ${s.exitCode})`);
-    const payload = text.endsWith("\n") ? text : text + "\n";
-    s.proc.stdin.write(payload);
+    if (!s || s.closed) return false;
+    const data = text.endsWith("\n") ? text : text + "\n";
+    try {
+        s.proc.stdin.write(data);
+        return true;
+    } catch (e) {
+        Logger.error(`[terminal] write failed for ${id}`, e);
+        return false;
+    }
 }
 
-export async function readFromSession(id: string, opts?: { waitMs?: number; clear?: boolean }): Promise<{ output: string; closed: boolean; exitCode: number | null }> {
+export async function readFromSession(
+    id: string,
+    opts: ReadSessionOpts = {}
+): Promise<ReadResult> {
     const s = sessions.get(id);
-    if (!s) throw new Error(`Session ${id} not found`);
-    const waitMs = Math.max(0, Math.min(30000, opts?.waitMs ?? 1000));
+    if (!s) {
+        return { output: "(no such session)", closed: true, exitCode: null };
+    }
+    const waitMs = opts.waitMs != null ? Math.min(Math.max(0, opts.waitMs), 30000) : 1000;
+    const clear = opts.clear !== false;
     if (waitMs > 0 && !s.closed) {
-        await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
+        await new Promise((r) => setTimeout(r, waitMs));
     }
     const output = s.buffer;
-    if (opts?.clear !== false) s.buffer = "";
-    return { output, closed: s.closed, exitCode: s.exitCode };
+    const userInput = s.userInputBuffer;
+    if (clear) {
+        s.buffer = "";
+        s.bufferBytes = 0;
+        s.userInputBuffer = "";
+    }
+    return {
+        output,
+        closed: s.closed,
+        exitCode: s.exitCode,
+        userInputSinceLastRead: userInput || undefined,
+    };
 }
 
 export function closeSession(id: string): boolean {
@@ -119,28 +259,60 @@ export function closeSession(id: string): boolean {
     if (!s.closed) {
         try {
             s.proc.kill();
-        } catch { /* ignore */ }
+        } catch (e) {
+            Logger.error(`[terminal] kill failed for ${id}`, e);
+        }
     }
+    try {
+        s.terminal.dispose();
+    } catch { /* ignore */ }
     sessions.delete(id);
-    Logger.log(`[terminal] closed ${id}`);
     return true;
 }
 
-export function listSessions(): Array<{ id: string; cwd: string; shell: string; closed: boolean; exitCode: number | null; bufferBytes: number; ageMs: number }> {
+export function peekSession(id: string): {
+    output: string;
+    userInputBuffer: string;
+    closed: boolean;
+    exitCode: number | null;
+} | null {
+    const s = sessions.get(id);
+    if (!s) return null;
+    return {
+        output: s.buffer,
+        userInputBuffer: s.userInputBuffer,
+        closed: s.closed,
+        exitCode: s.exitCode,
+    };
+}
+
+export function listSessions(): SessionInfo[] {
     const now = Date.now();
     return Array.from(sessions.values()).map((s) => ({
         id: s.id,
         cwd: s.cwd,
-        shell: path.basename(s.shell),
+        shell: s.shell,
         closed: s.closed,
         exitCode: s.exitCode,
-        bufferBytes: Buffer.byteLength(s.buffer, "utf8"),
+        bufferBytes: s.bufferBytes,
         ageMs: now - s.createdAt,
+        userInputChars: s.userInputBuffer.length,
+        userInputBuffer: s.userInputBuffer,
+        lastUserInputAt: s.lastUserInputAt,
     }));
 }
 
+export function showSession(id: string): boolean {
+    const s = sessions.get(id);
+    if (!s) return false;
+    s.terminal.show(false);
+    return true;
+}
+
 export function disposeAllSessions(): void {
-    for (const id of Array.from(sessions.keys())) {
-        closeSession(id);
+    for (const s of sessions.values()) {
+        try { s.proc.kill(); } catch { /* ignore */ }
+        try { s.terminal.dispose(); } catch { /* ignore */ }
     }
+    sessions.clear();
 }

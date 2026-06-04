@@ -72,6 +72,39 @@
     const tasksAddRow = $("tasksAddRow");
     const tasksAddInput = $("tasksAddInput");
     var currentTasks = [];
+    const memoryBtn = $("memoryBtn");
+    const memoryBadge = $("memoryBadge");
+    const memoryPanel = $("memoryPanel");
+    const memoryBody = $("memoryBody");
+    const memoryClearBtn = $("memoryClearBtn");
+    const memoryCloseBtn = $("memoryCloseBtn");
+    const memoryAddBtn = $("memoryAddBtn");
+    const memoryAddRow = $("memoryAddRow");
+    const memoryAddKey = $("memoryAddKey");
+    const memoryAddValue = $("memoryAddValue");
+    const memoryAddSave = $("memoryAddSave");
+    const memoryAddCancel = $("memoryAddCancel");
+    const memorySearchInput = $("memorySearchInput");
+    var currentMemories = [];
+    var memoryQuery = "";
+    const mcpBtn = $("mcpBtn");
+    const mcpBadge = $("mcpBadge");
+    const mcpPanel = $("mcpPanel");
+    const mcpBody = $("mcpBody");
+    const mcpAddBtn = $("mcpAddBtn");
+    const mcpReloadBtn = $("mcpReloadBtn");
+    const mcpEditBtn = $("mcpEditBtn");
+    const mcpCloseBtn = $("mcpCloseBtn");
+    const mcpAddRow = $("mcpAddRow");
+    const mcpAddName = $("mcpAddName");
+    const mcpAddCommand = $("mcpAddCommand");
+    const mcpAddArgs = $("mcpAddArgs");
+    const mcpAddEnv = $("mcpAddEnv");
+    const mcpAddSave = $("mcpAddSave");
+    const mcpAddCancel = $("mcpAddCancel");
+    const mcpAddError = $("mcpAddError");
+    var currentMcpServers = [];
+    var expandedMcpTools = new Set();
     const mentionPopup = $("mentionPopup");
     const dropOverlay = $("dropOverlay");
     const attachedFilesEl = $("attachedFiles");
@@ -1893,6 +1926,526 @@
             showTasksPanel(false);
         }
     });
+
+    // ========== Memory panel ==========
+    function showMemoryPanel(visible) {
+        if (!memoryPanel) return;
+        memoryPanel.dataset.visible = visible ? "true" : "false";
+        memoryPanel.style.display = visible ? "flex" : "none";
+    }
+    function showMemoryAddRow(visible) {
+        if (!memoryAddRow) return;
+        memoryAddRow.style.display = visible ? "flex" : "none";
+        if (visible) {
+            memoryAddKey.value = "";
+            memoryAddValue.value = "";
+            setTimeout(function() { memoryAddKey.focus(); }, 20);
+        }
+    }
+    function updateMemoryBadge() {
+        if (!memoryBadge) return;
+        var n = currentMemories.length;
+        if (n > 0) {
+            memoryBadge.textContent = String(n);
+            memoryBadge.style.display = "inline-block";
+        } else {
+            memoryBadge.style.display = "none";
+        }
+    }
+    function buildMemoryCard(entry) {
+        var card = document.createElement("div");
+        card.className = "memory-card";
+        card.dataset.key = entry.key;
+
+        var head = document.createElement("div");
+        head.className = "memory-card-head";
+
+        var keyEl = document.createElement("div");
+        keyEl.className = "mc-key";
+        keyEl.textContent = entry.key;
+        keyEl.title = "Click to rename";
+        keyEl.addEventListener("click", function(e) {
+            if (keyEl.getAttribute("contenteditable") === "true") return;
+            e.stopPropagation();
+            beginEditMemoryKey(keyEl, entry);
+        });
+        head.appendChild(keyEl);
+
+        var del = document.createElement("button");
+        del.className = "mc-del";
+        del.innerHTML = "\u00D7";
+        del.title = "Delete memory";
+        del.addEventListener("click", function(e) {
+            e.stopPropagation();
+            vscode.postMessage({ type: "deleteMemory", key: entry.key });
+        });
+        head.appendChild(del);
+        card.appendChild(head);
+
+        var valEl = document.createElement("div");
+        valEl.className = "mc-value";
+        valEl.textContent = entry.value;
+        valEl.title = "Click to edit";
+        valEl.addEventListener("click", function(e) {
+            if (valEl.getAttribute("contenteditable") === "true") return;
+            if (valEl.classList.contains("truncated") && !valEl.classList.contains("expanded")) {
+                return;
+            }
+            e.stopPropagation();
+            beginEditMemoryValue(valEl, entry);
+        });
+        card.appendChild(valEl);
+
+        requestAnimationFrame(function() {
+            if (valEl.scrollHeight > valEl.clientHeight + 2) {
+                valEl.classList.add("truncated");
+                var toggle = document.createElement("div");
+                toggle.className = "mc-toggle";
+                toggle.textContent = "Show more";
+                toggle.addEventListener("click", function(e) {
+                    e.stopPropagation();
+                    var expanded = valEl.classList.toggle("expanded");
+                    toggle.textContent = expanded ? "Show less" : "Show more";
+                });
+                card.appendChild(toggle);
+            }
+        });
+        return card;
+    }
+
+    function beginEditMemoryKey(keyEl, entry) {
+        keyEl.setAttribute("contenteditable", "true");
+        var original = entry.key;
+        keyEl.focus();
+        var range = document.createRange();
+        range.selectNodeContents(keyEl);
+        var sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+        var committed = false;
+        function commit() {
+            if (committed) return;
+            committed = true;
+            keyEl.removeAttribute("contenteditable");
+            var val = (keyEl.textContent || "").trim();
+            if (!val) { keyEl.textContent = original; return; }
+            if (val === original) return;
+            vscode.postMessage({ type: "renameMemory", oldKey: original, newKey: val });
+        }
+        function cancel() {
+            if (committed) return;
+            committed = true;
+            keyEl.removeAttribute("contenteditable");
+            keyEl.textContent = original;
+        }
+        keyEl.addEventListener("blur", commit, { once: true });
+        keyEl.addEventListener("keydown", function(e) {
+            if (e.key === "Enter") { e.preventDefault(); commit(); keyEl.blur(); }
+            else if (e.key === "Escape") { e.preventDefault(); cancel(); keyEl.blur(); }
+        });
+    }
+
+    function beginEditMemoryValue(valEl, entry) {
+        valEl.setAttribute("contenteditable", "true");
+        valEl.classList.add("expanded");
+        var original = entry.value;
+        valEl.focus();
+        var range = document.createRange();
+        range.selectNodeContents(valEl);
+        var sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+        var committed = false;
+        function commit() {
+            if (committed) return;
+            committed = true;
+            valEl.removeAttribute("contenteditable");
+            var val = valEl.textContent || "";
+            if (val === original) return;
+            vscode.postMessage({ type: "editMemoryValue", key: entry.key, value: val });
+        }
+        function cancel() {
+            if (committed) return;
+            committed = true;
+            valEl.removeAttribute("contenteditable");
+            valEl.textContent = original;
+        }
+        valEl.addEventListener("blur", commit, { once: true });
+        valEl.addEventListener("keydown", function(e) {
+            if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault(); commit(); valEl.blur();
+            } else if (e.key === "Escape") {
+                e.preventDefault(); cancel(); valEl.blur();
+            }
+        });
+    }
+
+    function renderMemoryPanel() {
+        if (!memoryBody) return;
+        memoryBody.innerHTML = "";
+        var list = currentMemories;
+        if (memoryQuery) {
+            var q = memoryQuery.toLowerCase();
+            list = list.filter(function(e) {
+                return e.key.toLowerCase().indexOf(q) >= 0 || e.value.toLowerCase().indexOf(q) >= 0;
+            });
+        }
+        if (!list.length) {
+            var empty = document.createElement("div");
+            empty.className = "memory-empty";
+            if (memoryQuery) {
+                empty.textContent = "No memories match \"" + memoryQuery + "\".";
+            } else {
+                empty.textContent = "No memories yet. Add one with + above, or let the agent remember things while working.";
+            }
+            memoryBody.appendChild(empty);
+            return;
+        }
+        for (var i = 0; i < list.length; i++) {
+            memoryBody.appendChild(buildMemoryCard(list[i]));
+        }
+    }
+
+    if (memoryBtn) {
+        memoryBtn.addEventListener("click", function() {
+            var open = memoryPanel.style.display !== "none";
+            showMemoryPanel(!open);
+            if (!open) {
+                vscode.postMessage({ type: "getMemories" });
+                renderMemoryPanel();
+            }
+        });
+    }
+    if (memoryCloseBtn) {
+        memoryCloseBtn.addEventListener("click", function() {
+            showMemoryPanel(false);
+            showMemoryAddRow(false);
+        });
+    }
+    if (memoryClearBtn) {
+        memoryClearBtn.addEventListener("click", function() {
+            if (currentMemories.length === 0) return;
+            vscode.postMessage({ type: "clearMemories" });
+        });
+    }
+    if (memoryAddBtn) {
+        memoryAddBtn.addEventListener("click", function(e) {
+            e.stopPropagation();
+            var visible = memoryAddRow && memoryAddRow.style.display !== "none";
+            showMemoryAddRow(!visible);
+        });
+    }
+    if (memoryAddSave) {
+        memoryAddSave.addEventListener("click", function() {
+            var k = (memoryAddKey.value || "").trim();
+            var v = memoryAddValue.value || "";
+            if (!k) { memoryAddKey.focus(); return; }
+            vscode.postMessage({ type: "addMemory", key: k, value: v });
+            showMemoryAddRow(false);
+        });
+    }
+    if (memoryAddCancel) {
+        memoryAddCancel.addEventListener("click", function() { showMemoryAddRow(false); });
+    }
+    if (memoryAddKey) {
+        memoryAddKey.addEventListener("keydown", function(e) {
+            if (e.key === "Enter") { e.preventDefault(); memoryAddValue.focus(); }
+            else if (e.key === "Escape") { e.preventDefault(); showMemoryAddRow(false); }
+        });
+    }
+    if (memoryAddValue) {
+        memoryAddValue.addEventListener("keydown", function(e) {
+            if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault(); memoryAddSave.click();
+            } else if (e.key === "Escape") {
+                e.preventDefault(); showMemoryAddRow(false);
+            }
+        });
+    }
+    if (memorySearchInput) {
+        memorySearchInput.addEventListener("input", function() {
+            memoryQuery = memorySearchInput.value.trim();
+            renderMemoryPanel();
+        });
+    }
+    document.addEventListener("click", function(e) {
+        if (!memoryPanel || memoryPanel.style.display === "none") return;
+        if (!memoryPanel.contains(e.target) && memoryBtn && !memoryBtn.contains(e.target)) {
+            showMemoryPanel(false);
+            showMemoryAddRow(false);
+        }
+    });
+    document.addEventListener("keydown", function(e) {
+        if (e.key === "Escape" && memoryPanel && memoryPanel.style.display !== "none") {
+            if (memoryAddRow && memoryAddRow.style.display !== "none") {
+                showMemoryAddRow(false);
+                return;
+            }
+            showMemoryPanel(false);
+        }
+    });
+
+    // ========== MCP panel ==========
+    function showMcpPanel(visible) {
+        if (!mcpPanel) return;
+        mcpPanel.dataset.visible = visible ? "true" : "false";
+        mcpPanel.style.display = visible ? "flex" : "none";
+    }
+    function showMcpAddRow(visible) {
+        if (!mcpAddRow) return;
+        mcpAddRow.style.display = visible ? "flex" : "none";
+        if (mcpAddError) { mcpAddError.style.display = "none"; mcpAddError.textContent = ""; }
+        if (visible) {
+            mcpAddName.value = "";
+            mcpAddCommand.value = "";
+            mcpAddArgs.value = "";
+            mcpAddEnv.value = "";
+            setTimeout(function() { mcpAddName.focus(); }, 20);
+        }
+    }
+    function updateMcpBadge() {
+        if (!mcpBadge) return;
+        var ready = currentMcpServers.filter(function(s) { return s.status === "ready"; }).length;
+        var err = currentMcpServers.filter(function(s) { return s.status === "error"; }).length;
+        if (err > 0) {
+            mcpBadge.textContent = "!";
+            mcpBadge.style.background = "var(--err)";
+            mcpBadge.style.display = "inline-block";
+        } else if (ready > 0) {
+            mcpBadge.textContent = String(ready);
+            mcpBadge.style.background = "";
+            mcpBadge.style.display = "inline-block";
+        } else {
+            mcpBadge.style.display = "none";
+        }
+    }
+    function svgIcon(paths) {
+        var svg = '<svg viewBox="0 0 24 24">' + paths + '</svg>';
+        return svg;
+    }
+    function buildMcpCard(srv) {
+        var card = document.createElement("div");
+        card.className = "mcp-card status-" + srv.status;
+        card.dataset.name = srv.name;
+
+        var head = document.createElement("div");
+        head.className = "mcp-card-head";
+
+        var dot = document.createElement("span");
+        dot.className = "mcp-status-dot status-" + srv.status;
+        dot.title = srv.status;
+        head.appendChild(dot);
+
+        var name = document.createElement("div");
+        name.className = "mcp-name";
+        name.textContent = srv.name;
+        head.appendChild(name);
+
+        var stext = document.createElement("span");
+        stext.className = "mcp-status-text";
+        if (srv.status === "ready") stext.textContent = srv.toolCount + " tool" + (srv.toolCount === 1 ? "" : "s");
+        else stext.textContent = srv.status;
+        head.appendChild(stext);
+
+        var actions = document.createElement("div");
+        actions.className = "mcp-actions";
+
+        var restartBtn = document.createElement("button");
+        restartBtn.className = "mcp-act-btn";
+        restartBtn.title = "Restart";
+        restartBtn.innerHTML = svgIcon('<polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>');
+        restartBtn.addEventListener("click", function(e) {
+            e.stopPropagation();
+            vscode.postMessage({ type: "mcpRestartOne", name: srv.name });
+        });
+        actions.appendChild(restartBtn);
+
+        var toggleBtn = document.createElement("button");
+        toggleBtn.className = "mcp-act-btn";
+        toggleBtn.title = srv.disabled ? "Enable" : "Disable";
+        toggleBtn.innerHTML = srv.disabled
+            ? svgIcon('<circle cx="12" cy="12" r="9"/><polyline points="8 12 11 15 16 9"/>')
+            : svgIcon('<circle cx="12" cy="12" r="9"/><line x1="9" y1="9" x2="15" y2="15"/><line x1="15" y1="9" x2="9" y2="15"/>');
+        toggleBtn.addEventListener("click", function(e) {
+            e.stopPropagation();
+            vscode.postMessage({ type: "mcpToggle", name: srv.name });
+        });
+        actions.appendChild(toggleBtn);
+
+        var delBtn = document.createElement("button");
+        delBtn.className = "mcp-act-btn danger";
+        delBtn.title = "Remove";
+        delBtn.innerHTML = svgIcon('<polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/>');
+        delBtn.addEventListener("click", function(e) {
+            e.stopPropagation();
+            if (!confirm("Remove MCP server \"" + srv.name + "\"? This will edit your mcp.json.")) return;
+            vscode.postMessage({ type: "mcpRemove", name: srv.name });
+        });
+        actions.appendChild(delBtn);
+        head.appendChild(actions);
+        card.appendChild(head);
+
+        var cmd = document.createElement("div");
+        cmd.className = "mcp-cmd";
+        var argsStr = (srv.args && srv.args.length) ? " " + srv.args.join(" ") : "";
+        cmd.textContent = "$ " + srv.command + argsStr;
+        card.appendChild(cmd);
+
+        if (srv.error) {
+            var err = document.createElement("div");
+            err.className = "mcp-error";
+            err.textContent = srv.error;
+            card.appendChild(err);
+        }
+
+        if (srv.tools && srv.tools.length) {
+            var toolsWrap = document.createElement("div");
+            toolsWrap.className = "mcp-tools";
+            if (expandedMcpTools.has(srv.name)) toolsWrap.classList.add("expanded");
+            var toolsHead = document.createElement("div");
+            toolsHead.className = "mcp-tools-head";
+            toolsHead.innerHTML = '<span class="mcp-caret">\u25B6</span> Tools (' + srv.tools.length + ')';
+            toolsHead.addEventListener("click", function(e) {
+                e.stopPropagation();
+                var nowExpanded = toolsWrap.classList.toggle("expanded");
+                if (nowExpanded) expandedMcpTools.add(srv.name);
+                else expandedMcpTools.delete(srv.name);
+            });
+            toolsWrap.appendChild(toolsHead);
+            var list = document.createElement("div");
+            list.className = "mcp-tools-list";
+            srv.tools.forEach(function(t) {
+                var row = document.createElement("div");
+                row.className = "mcp-tool-row";
+                row.innerHTML = '<b>' + escapeHtml(t.name) + '</b>';
+                if (t.description) {
+                    row.innerHTML += '<span class="mcp-tool-desc">' + escapeHtml(t.description.slice(0, 120)) + '</span>';
+                }
+                list.appendChild(row);
+            });
+            toolsWrap.appendChild(list);
+            card.appendChild(toolsWrap);
+        }
+
+        return card;
+    }
+    function renderMcpPanel() {
+        if (!mcpBody) return;
+        mcpBody.innerHTML = "";
+        if (!currentMcpServers.length) {
+            var empty = document.createElement("div");
+            empty.className = "mcp-empty";
+            empty.innerHTML = "No MCP servers configured.<br>Click <b>+</b> to add one, or <b>Edit</b> to write JSON directly.";
+            mcpBody.appendChild(empty);
+            return;
+        }
+        currentMcpServers.forEach(function(s) { mcpBody.appendChild(buildMcpCard(s)); });
+    }
+
+    if (mcpBtn) {
+        mcpBtn.addEventListener("click", function() {
+            var open = mcpPanel.style.display !== "none";
+            showMcpPanel(!open);
+            if (!open) {
+                vscode.postMessage({ type: "getMcpServers" });
+                renderMcpPanel();
+            }
+        });
+    }
+    if (mcpCloseBtn) {
+        mcpCloseBtn.addEventListener("click", function() {
+            showMcpPanel(false);
+            showMcpAddRow(false);
+        });
+    }
+    if (mcpReloadBtn) {
+        mcpReloadBtn.addEventListener("click", function() {
+            vscode.postMessage({ type: "mcpReloadAll" });
+        });
+    }
+    if (mcpEditBtn) {
+        mcpEditBtn.addEventListener("click", function() {
+            vscode.postMessage({ type: "mcpEditConfig" });
+            showMcpPanel(false);
+        });
+    }
+    if (mcpAddBtn) {
+        mcpAddBtn.addEventListener("click", function(e) {
+            e.stopPropagation();
+            var visible = mcpAddRow && mcpAddRow.style.display !== "none";
+            showMcpAddRow(!visible);
+        });
+    }
+    if (mcpAddCancel) {
+        mcpAddCancel.addEventListener("click", function() { showMcpAddRow(false); });
+    }
+    function parseMcpArgs(str) {
+        if (!str || !str.trim()) return [];
+        var result = [];
+        var current = "";
+        var inQuote = null;
+        for (var i = 0; i < str.length; i++) {
+            var ch = str[i];
+            if (inQuote) {
+                if (ch === inQuote) { inQuote = null; }
+                else { current += ch; }
+            } else if (ch === '"' || ch === "'") {
+                inQuote = ch;
+            } else if (ch === " " || ch === "\t") {
+                if (current) { result.push(current); current = ""; }
+            } else {
+                current += ch;
+            }
+        }
+        if (current) result.push(current);
+        return result;
+    }
+    function parseMcpEnv(str) {
+        var out = {};
+        if (!str) return out;
+        str.split(/\r?\n/).forEach(function(line) {
+            line = line.trim();
+            if (!line || line.startsWith("#")) return;
+            var eq = line.indexOf("=");
+            if (eq <= 0) return;
+            out[line.slice(0, eq).trim()] = line.slice(eq + 1).trim();
+        });
+        return out;
+    }
+    if (mcpAddSave) {
+        mcpAddSave.addEventListener("click", function() {
+            var name = (mcpAddName.value || "").trim();
+            var command = (mcpAddCommand.value || "").trim();
+            if (!name) { mcpAddError.textContent = "Name is required"; mcpAddError.style.display = "block"; mcpAddName.focus(); return; }
+            if (!command) { mcpAddError.textContent = "Command is required"; mcpAddError.style.display = "block"; mcpAddCommand.focus(); return; }
+            var args = parseMcpArgs(mcpAddArgs.value);
+            var env = parseMcpEnv(mcpAddEnv.value);
+            vscode.postMessage({
+                type: "mcpAdd",
+                name: name,
+                command: command,
+                args: args,
+                env: Object.keys(env).length ? env : undefined,
+            });
+        });
+    }
+    document.addEventListener("click", function(e) {
+        if (!mcpPanel || mcpPanel.style.display === "none") return;
+        if (!mcpPanel.contains(e.target) && mcpBtn && !mcpBtn.contains(e.target)) {
+            showMcpPanel(false);
+            showMcpAddRow(false);
+        }
+    });
+    document.addEventListener("keydown", function(e) {
+        if (e.key === "Escape" && mcpPanel && mcpPanel.style.display !== "none") {
+            if (mcpAddRow && mcpAddRow.style.display !== "none") {
+                showMcpAddRow(false);
+                return;
+            }
+            showMcpPanel(false);
+        }
+    });
+
     chatsNewBtn.addEventListener("click", () => {
         vscode.postMessage({ type: "newChat" });
         showChatsPanel(false);
@@ -2339,6 +2892,30 @@
                 updateTasksBadge();
                 if (tasksPanel && tasksPanel.style.display !== "none") {
                     renderTasksPanel();
+                }
+                break;
+            case "memories":
+                currentMemories = Array.isArray(m.memories) ? m.memories : [];
+                updateMemoryBadge();
+                if (memoryPanel && memoryPanel.style.display !== "none") {
+                    renderMemoryPanel();
+                }
+                break;
+            case "mcpServers":
+                currentMcpServers = Array.isArray(m.servers) ? m.servers : [];
+                updateMcpBadge();
+                if (mcpPanel && mcpPanel.style.display !== "none") {
+                    renderMcpPanel();
+                }
+                break;
+            case "mcpAddResult":
+                if (mcpAddError) {
+                    if (m.ok) {
+                        showMcpAddRow(false);
+                    } else {
+                        mcpAddError.textContent = m.error || "Failed to add server";
+                        mcpAddError.style.display = "block";
+                    }
                 }
                 break;
             case "openSettings":

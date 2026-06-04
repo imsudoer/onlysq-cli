@@ -12,6 +12,7 @@ import {
 } from "../../services/workspace/projectContext";
 import { SUBAGENTS } from "./subagentDefs";
 import { hasPendingEdits, waitForPendingEdits } from "../../services/workspace/diffPreview";
+import { onUserInput, UserInputEvent } from "../../services/workspace/terminalSession";
 
 const WRITE_TOOLS = new Set([
     "propose_edit",
@@ -97,7 +98,16 @@ const SYSTEM_BASE = `You are OnlySq CLI, an autonomous coding agent operating in
     - Delete tasks that become irrelevant.
     - Use list_agent_tasks to review your plan if you lose track.
     - This helps the user see your progress and understand your plan.
-    
+
+    14. Live terminal sharing. The 'terminal' tool opens a real shell that the user can ALSO type into. If you receive a system message starting with "(User just typed in a live terminal...", read it carefully — the user is collaborating with you in the shell. Acknowledge their input, adjust your plan, or use 'terminal read'/'terminal peek' to see the resulting output. Do not blindly continue your previous plan as if nothing happened.
+
+    15. Be honest about uncertainty. If you don't know something — a library version, an API behaviour, a recent event, the contents of a file you haven't read, what a function returns — SAY "I don't know" or "let me check" and then USE TOOLS to find out (read_file, search, fetch_url, web_search, run a command, ask the user). Do NOT:
+    - invent function signatures, file paths, config keys, command-line flags, package names, version numbers, error messages, or git history;
+    - confabulate code that "should work" without verifying the API exists;
+    - pretend to remember context that wasn't actually in this conversation or in your memory/tasks/project-context;
+    - guess about events or releases after your training cutoff — acknowledge the limit and verify via tools.
+    A short "I'm not sure, let me check" followed by a tool call is always better than a confident wrong answer.
+
     Be concise. Don't dump file contents back at the user unless asked.`;
 
 export async function runAgent(
@@ -112,6 +122,22 @@ export async function runAgent(
 ): Promise<ChatMessage[]> {
     const cfg = settings();
     const cache = new ToolCache(cfg.toolCache);
+
+    const pendingUserInput = new Map<string, string>();
+    const unsubUserInput = onUserInput((e: UserInputEvent) => {
+        const prev = pendingUserInput.get(e.sessionId) || "";
+        pendingUserInput.set(e.sessionId, prev + e.data);
+        Logger.log(`[agent] user typed in ${e.sessionId}: ${JSON.stringify(e.data).slice(0, 80)}`);
+    });
+    function drainUserInput(): string | null {
+        if (!pendingUserInput.size) return null;
+        const parts: string[] = [];
+        for (const [sid, data] of pendingUserInput) {
+            if (data) parts.push(`[user typed in terminal ${sid}]: ${data}`);
+        }
+        pendingUserInput.clear();
+        return parts.length ? parts.join("\n") : null;
+    }
 
     let systemPrompt = `${SYSTEM_BASE}\n\n--- System context ---\n${systemBriefForLLM()}`;
     try {
@@ -156,7 +182,17 @@ export async function runAgent(
         if (signal?.aborted) {
             Logger.log("[agent] aborted by signal");
             onEvent({ type: "done", reason: "cancelled" });
+            unsubUserInput();
             return messages;
+        }
+
+        const userInputNote = drainUserInput();
+        if (userInputNote) {
+            Logger.log(`[agent] injecting user terminal input notice`);
+            messages.push({
+                role: "system",
+                content: `(User just typed in a live terminal. Take this into account before the next action.)\n${userInputNote}`,
+            });
         }
 
         Logger.log(
@@ -203,6 +239,7 @@ export async function runAgent(
         } catch (e: any) {
             Logger.error("[agent] stream error", e);
             onEvent({ type: "error", message: String(e?.message ?? e) });
+            unsubUserInput();
             return messages;
         }
 
@@ -229,6 +266,7 @@ export async function runAgent(
                 );
             }
             onEvent({ type: "done" });
+            unsubUserInput();
             return messages;
         }
 
@@ -362,6 +400,7 @@ export async function runAgent(
 
         if (signal?.aborted) {
             onEvent({ type: "done", reason: "cancelled" });
+            unsubUserInput();
             return messages;
         }
 
@@ -379,6 +418,7 @@ export async function runAgent(
 
     Logger.log("[agent] max_steps reached");
     onEvent({ type: "done", reason: "max_steps" });
+    unsubUserInput();
     return messages;
 }
 

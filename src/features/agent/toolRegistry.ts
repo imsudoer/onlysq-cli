@@ -24,4 +24,20 @@ export class ToolRegistry {
     get(name: string): ToolHandler | undefined {
         return this.tools.get(name);
     }
+    unregister(name: string): boolean {
+        return this.tools.delete(name);
+    }
+    unregisterPrefix(prefix: string): string[] {
+        const removed: string[] = [];
+        for (const name of [...this.tools.keys()]) {
+            if (name.startsWith(prefix)) {
+                this.tools.delete(name);
+                removed.push(name);
+            }
+        }
+        return removed;
+    }
+    has(name: string): boolean {
+        return this.tools.has(name);
+    }
 }
