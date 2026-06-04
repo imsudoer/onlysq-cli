@@ -62,6 +62,13 @@
     const settingsBody = $("settingsBody");
     const exportBtn = $("exportBtn");
     const exportMenu = $("exportMenu");
+    const tasksBtn = $("tasksBtn");
+    const tasksBadge = $("tasksBadge");
+    const tasksPanel = $("tasksPanel");
+    const tasksBody = $("tasksBody");
+    const tasksClearBtn = $("tasksClearBtn");
+    const tasksCloseBtn = $("tasksCloseBtn");
+    var currentTasks = [];
     const mentionPopup = $("mentionPopup");
     const dropOverlay = $("dropOverlay");
     const attachedFilesEl = $("attachedFiles");
@@ -733,8 +740,8 @@
         var toolGroups = {
             "Read-only": ["read_file","list_dir","list_tree","search","find_files","file_info","find_in_file",
                 "open_file","goto_position","get_cursor","get_selection","list_open_files","get_diagnostics",
-                "list_tasks","git_status","git_diff","workspace_info","system_info"],
-            "File edits": ["propose_edit","apply_at_line","replace_in_file","patch_file","delete_file","rename_file"],
+                "list_tasks","git_status","git_diff","workspace_info","system_info","read_project_context","get_my_config"],
+            "File edits": ["propose_edit","apply_at_line","replace_in_file","patch_file","delete_file","rename_file","update_project_context"],
             "Shell / commands": ["run_command","run_command_interactive","run_task","run_vscode_command","open_in_browser","git_commit"],
             "Web": ["fetch_url","web_search","scrape_page"],
             "Meta": ["pause_agent","ask_user","delegate"],
@@ -769,10 +776,10 @@
                 });
                 ctl.appendChild(sel);
                 sel.addEventListener("change", function() {
-                    var updated = Object.assign({}, policy);
-                    updated[tn] = sel.value;
-                    policy = updated;
-                    vscode.postMessage({ type: "setSetting", key: "agent.toolPolicy", value: updated });
+                    policy[tn] = sel.value;
+                    var delta = {};
+                    delta[tn] = sel.value;
+                    vscode.postMessage({ type: "setSetting", key: "agent.toolPolicy", value: delta });
                 });
             });
         });
@@ -1223,30 +1230,60 @@
     }
 
     var TASK_TOOLS = {create_task: true, update_task: true, delete_task: true, list_agent_tasks: true};
+    var taskTexts = {};
+
+    function statusLabel(s) {
+        if (s === "done") return "done";
+        if (s === "in_progress") return "in progress";
+        if (s === "todo") return "todo";
+        return s || "";
+    }
 
     function renderTaskWidget(name, args, result) {
         var dotClass = "created";
         var icon = "+";
         var label = "";
+        var fullText = "";
         if (name === "create_task") {
             dotClass = "created";
             icon = "+";
-            label = "Created task: <strong>" + escapeHtml((args && args.text) || result || "").slice(0, 60) + "</strong>";
+            fullText = (args && args.text) || "";
+            var idMatch = /task-\d+/.exec(result || "");
+            if (idMatch && fullText) taskTexts[idMatch[0]] = fullText;
+            var short = fullText.length > 60 ? fullText.slice(0, 60) + "\u2026" : fullText;
+            label = "Created: <strong>" + escapeHtml(short) + "</strong>";
         } else if (name === "update_task") {
             var st = args && args.status;
             if (st === "done") { dotClass = "completed"; icon = "\u2713"; }
             else if (st === "in_progress") { dotClass = "updated"; icon = "\u25B6"; }
             else { dotClass = "updated"; icon = "\u2022"; }
-            label = "Updated <strong>" + escapeHtml((args && args.id) || "") + "</strong> \u2192 " + escapeHtml(st || "");
+            var uid = (args && args.id) || "";
+            fullText = taskTexts[uid] || "";
+            var ushort = fullText.length > 50 ? fullText.slice(0, 50) + "\u2026" : fullText;
+            label = fullText
+                ? "<strong>" + escapeHtml(ushort) + "</strong> \u2192 " + escapeHtml(statusLabel(st))
+                : "Updated <strong>" + escapeHtml(uid) + "</strong> \u2192 " + escapeHtml(statusLabel(st));
         } else if (name === "delete_task") {
             dotClass = "deleted";
             icon = "\u2717";
-            label = "Removed task: <strong>" + escapeHtml((args && args.id) || "") + "</strong>";
+            var did = (args && args.id) || "";
+            fullText = taskTexts[did] || "";
+            var dshort = fullText.length > 50 ? fullText.slice(0, 50) + "\u2026" : fullText;
+            label = fullText
+                ? "Removed: <strong>" + escapeHtml(dshort) + "</strong>"
+                : "Removed task: <strong>" + escapeHtml(did) + "</strong>";
+            if (did) delete taskTexts[did];
         } else {
-            return null; // list_agent_tasks — use standard block
+            return null;
         }
         var w = document.createElement("div");
         w.className = "task-activity";
+        var tipParts = [];
+        if (fullText) tipParts.push(fullText);
+        if (args && args.id) tipParts.push("id: " + args.id);
+        if (args && args.status) tipParts.push("status: " + statusLabel(args.status));
+        if (name === "create_task" && args && args.status) tipParts.push("");
+        if (tipParts.length) w.title = tipParts.join("\n");
         w.innerHTML = '<div class="task-dot ' + dotClass + '">' + icon + '</div>' +
             '<div class="task-line"></div>' +
             '<div class="task-label">' + label + '</div>';
@@ -1553,6 +1590,94 @@
             chatsQuery = "";
             renderChatsList();
             setTimeout(() => chatsSearch.focus(), 20);
+        }
+    });
+
+    function showTasksPanel(visible) {
+        tasksPanel.dataset.visible = visible ? "true" : "false";
+        tasksPanel.style.display = visible ? "flex" : "none";
+    }
+
+    function renderTasksPanel() {
+        if (!tasksBody) return;
+        if (!currentTasks.length) {
+            tasksBody.innerHTML = '<div class="tasks-empty">No tasks yet. The agent creates tasks when working on multi-step goals.</div>';
+            return;
+        }
+        var groups = { in_progress: [], todo: [], done: [] };
+        for (var i = 0; i < currentTasks.length; i++) {
+            var t = currentTasks[i];
+            (groups[t.status] || groups.todo).push(t);
+        }
+        var order = [
+            ["in_progress", "In progress"],
+            ["todo", "To do"],
+            ["done", "Done"],
+        ];
+        var html = "";
+        for (var g = 0; g < order.length; g++) {
+            var key = order[g][0];
+            var label = order[g][1];
+            var list = groups[key];
+            if (!list.length) continue;
+            html += '<div class="tasks-group"><div class="tasks-group-title">' + label + ' (' + list.length + ')</div>';
+            for (var j = 0; j < list.length; j++) {
+                var item = list[j];
+                var icon = key === "done" ? "\u2713" : (key === "in_progress" ? "\u25B6" : "\u2022");
+                html += '<div class="tasks-item ' + key + '" title="' + escapeHtml(item.text) + '">' +
+                    '<div class="ti-dot">' + icon + '</div>' +
+                    '<div class="ti-body">' +
+                        '<div class="ti-text">' + escapeHtml(item.text) + '</div>' +
+                        '<div class="ti-meta">' + escapeHtml(item.id) + '</div>' +
+                    '</div>' +
+                '</div>';
+            }
+            html += '</div>';
+        }
+        tasksBody.innerHTML = html;
+    }
+
+    function updateTasksBadge() {
+        if (!tasksBadge) return;
+        var active = 0;
+        for (var i = 0; i < currentTasks.length; i++) {
+            if (currentTasks[i].status !== "done") active++;
+        }
+        if (active > 0) {
+            tasksBadge.textContent = String(active);
+            tasksBadge.style.display = "inline-block";
+        } else {
+            tasksBadge.style.display = "none";
+        }
+    }
+
+    if (tasksBtn) {
+        tasksBtn.addEventListener("click", function() {
+            var open = tasksPanel.style.display !== "none";
+            showTasksPanel(!open);
+            if (!open) {
+                vscode.postMessage({ type: "getTasks" });
+                renderTasksPanel();
+            }
+        });
+    }
+    if (tasksCloseBtn) {
+        tasksCloseBtn.addEventListener("click", function() { showTasksPanel(false); });
+    }
+    if (tasksClearBtn) {
+        tasksClearBtn.addEventListener("click", function() {
+            vscode.postMessage({ type: "clearTasks" });
+        });
+    }
+    document.addEventListener("click", function(e) {
+        if (!tasksPanel || tasksPanel.style.display === "none") return;
+        if (!tasksPanel.contains(e.target) && tasksBtn && !tasksBtn.contains(e.target)) {
+            showTasksPanel(false);
+        }
+    });
+    document.addEventListener("keydown", function(e) {
+        if (e.key === "Escape" && tasksPanel && tasksPanel.style.display !== "none") {
+            showTasksPanel(false);
         }
     });
     chatsNewBtn.addEventListener("click", () => {
@@ -1992,6 +2117,13 @@
                 break;
             case "settings":
                 renderSettings(m);
+                break;
+            case "tasks":
+                currentTasks = Array.isArray(m.tasks) ? m.tasks : [];
+                updateTasksBadge();
+                if (tasksPanel && tasksPanel.style.display !== "none") {
+                    renderTasksPanel();
+                }
                 break;
             case "openSettings":
                 showSettings(true);

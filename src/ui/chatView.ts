@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { OpenAIClient } from "../services/llm/openaiClient";
 import { ChatMessage } from "../services/llm/types";
 import { ToolRegistry } from "../features/agent/toolRegistry";
+import { getAgentTasks, onAgentTasksChange, clearAgentTasks } from "../features/agent/tools";
 import { runAgent } from "../features/agent/loop";
 import { AuthService, AuthState } from "../services/auth/authService";
 import { ModelsService } from "../services/llm/modelsService";
@@ -40,6 +41,7 @@ const CHAT_BODY = `
       <button class="export-menu-item" data-format="json">Export as JSON</button>
     </div>
   </div>
+  <button class="icon-btn tasks-btn" id="tasksBtn" title="Agent tasks"><svg viewBox="0 0 24 24"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg><span class="tasks-badge" id="tasksBadge" style="display:none">0</span></button>
   <button class="icon-btn" id="settingsBtn" title="Settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09a1.65 1.65 0 00-1.08-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09a1.65 1.65 0 001.51-1.08 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001.08 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1.08z"/></svg></button>
 </div>
 
@@ -49,6 +51,15 @@ const CHAT_BODY = `
     <button class="btn ghost small" id="chatsNewBtn">+ New</button>
   </div>
   <div id="chatsList" class="chats-list"></div>
+</div>
+
+<div id="tasksPanel" class="tasks-panel" style="display:none">
+  <div class="tasks-head">
+    <span class="tasks-title">Agent tasks</span>
+    <button class="btn ghost small" id="tasksClearBtn" title="Clear all">Clear</button>
+    <button class="icon-btn" id="tasksCloseBtn" title="Close"><svg viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+  </div>
+  <div id="tasksBody" class="tasks-body"><div class="tasks-empty">No tasks yet.</div></div>
 </div>
 
 <div id="settingsPanel" class="settings-panel" style="display:none">
@@ -163,6 +174,14 @@ export class ChatView implements vscode.WebviewViewProvider {
         return this.activeChat;
     }
 
+    private pushTasks(): void {
+        if (!this.view) return;
+        this.view.webview.postMessage({
+            type: "tasks",
+            tasks: getAgentTasks(),
+        });
+    }
+
     private pushSettings(): void {
         if (!this.view) return;
         const c = vscode.workspace.getConfiguration("onlysq");
@@ -238,6 +257,9 @@ export class ChatView implements vscode.WebviewViewProvider {
             })
         );
         this.subs.push(view.onDidDispose(() => this.disposeSubs()));
+        const unsubTasks = onAgentTasksChange(() => this.pushTasks());
+        this.subs.push({ dispose: unsubTasks });
+        this.pushTasks();
         this.subs.push(
             vscode.workspace.onDidChangeConfiguration((e) => {
                 if (e.affectsConfiguration("onlysq")) {
@@ -488,12 +510,24 @@ export class ChatView implements vscode.WebviewViewProvider {
                 this.pushSettings();
                 return;
 
+            case "getTasks":
+                this.pushTasks();
+                return;
+
+            case "clearTasks":
+                clearAgentTasks();
+                return;
+
             case "setSetting":
                 if (typeof m.key === "string") {
                     const target = vscode.ConfigurationTarget.Global;
-                    await vscode.workspace
-                        .getConfiguration("onlysq")
-                        .update(m.key, m.value, target);
+                    const cfg = vscode.workspace.getConfiguration("onlysq");
+                    let nextValue = m.value;
+                    if (m.key === "agent.toolPolicy") {
+                        const existing = cfg.get<Record<string, string>>("agent.toolPolicy", {});
+                        nextValue = { ...existing, ...(m.value || {}) };
+                    }
+                    await cfg.update(m.key, nextValue, target);
                     this.pushSettings();
                 }
                 return;

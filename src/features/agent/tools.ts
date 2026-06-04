@@ -55,13 +55,38 @@ export function setMemoryStore(store: MemoryStore): void {
     _memoryStore = store;
 }
 
-interface AgentTask {
+export interface AgentTask {
     id: string;
     text: string;
     status: "todo" | "in_progress" | "done";
 }
 const agentTasks: AgentTask[] = [];
 let taskCounter = 0;
+
+type TasksListener = (tasks: AgentTask[]) => void;
+const tasksListeners = new Set<TasksListener>();
+
+function emitTasksChange(): void {
+    const snapshot = agentTasks.map((t) => ({ ...t }));
+    for (const l of tasksListeners) {
+        try { l(snapshot); } catch { /* ignore */ }
+    }
+}
+
+export function getAgentTasks(): AgentTask[] {
+    return agentTasks.map((t) => ({ ...t }));
+}
+
+export function onAgentTasksChange(listener: TasksListener): () => void {
+    tasksListeners.add(listener);
+    return () => tasksListeners.delete(listener);
+}
+
+export function clearAgentTasks(): void {
+    if (!agentTasks.length) return;
+    agentTasks.length = 0;
+    emitTasksChange();
+}
 
 const obj = (props: Record<string, any>, required: string[] = []) => ({
     type: "object",
@@ -1118,7 +1143,8 @@ export const builtinTools: ToolHandler[] = [
                 proposal.id,
                 projectContextPath(),
                 a.reason ? String(a.reason) : undefined,
-                "Project context update"
+                "Project context update",
+                "update_project_context"
             );
         },
     },
@@ -1152,7 +1178,7 @@ export const builtinTools: ToolHandler[] = [
                     maxAgentSteps: cfg.maxAgentSteps,
                     parallelTools: cfg.parallelTools,
                     toolCache: cfg.toolCache,
-                    approval: cfg.approval,
+                    toolPolicy: cfg.toolPolicy,
                     projectContext: {
                         path: projectContextPath(),
                         exists: hasCtx,
@@ -1337,6 +1363,7 @@ export const builtinTools: ToolHandler[] = [
         run: async (a: any) => {
             const id = "task-" + (++taskCounter);
             agentTasks.push({ id, text: String(a.text), status: a.status || "todo" });
+            emitTasksChange();
             return `Created task ${id}: ${a.text}`;
         },
     },
@@ -1350,6 +1377,7 @@ export const builtinTools: ToolHandler[] = [
             const t = agentTasks.find(t => t.id === String(a.id));
             if (!t) return `Task ${a.id} not found.`;
             t.status = a.status;
+            emitTasksChange();
             return `Updated ${t.id}: ${t.status}`;
         },
     },
@@ -1363,6 +1391,7 @@ export const builtinTools: ToolHandler[] = [
             const idx = agentTasks.findIndex(t => t.id === String(a.id));
             if (idx < 0) return `Task ${a.id} not found.`;
             agentTasks.splice(idx, 1);
+            emitTasksChange();
             return `Deleted task ${a.id}.`;
         },
     },

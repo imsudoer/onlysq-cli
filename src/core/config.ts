@@ -49,9 +49,11 @@ export const TOOL_DEFAULTS: Record<string, ToolPolicy> = {
     workspace_info: "always", system_info: "always", delegate: "always",
     add_memory: "always", get_memory: "always", view_memories: "always", delete_memory: "always",
     create_task: "always", update_task: "always", delete_task: "always", list_agent_tasks: "always",
+    read_project_context: "always", get_my_config: "always",
     // Write
     propose_edit: "ask", apply_at_line: "ask", replace_in_file: "ask",
     patch_file: "ask", delete_file: "ask", rename_file: "ask",
+    update_project_context: "ask",
     // Shell / commands
     run_command: "ask", run_command_interactive: "ask", run_task: "ask",
     run_vscode_command: "ask", open_in_browser: "ask", git_commit: "ask",
