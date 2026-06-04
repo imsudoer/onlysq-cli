@@ -295,6 +295,7 @@ export async function activate(ctx: vscode.ExtensionContext) {
                 let lastPct = -1;
                 try {
                     const result = await indexer.indexWorkspace({
+                        model: settings().embeddingModel,
                         signal: ac.signal,
                         onProgress: (p) => {
                             const total = p.filesTotal || 1;

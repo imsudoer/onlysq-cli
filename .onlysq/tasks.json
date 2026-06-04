@@ -1,0 +1,75 @@
+{
+  "counter": 14,
+  "tasks": [
+    {
+      "id": "task-1",
+      "text": "Terminal sessions: тул terminal с действиями open/write/read/close через child_process.spawn + VS Code Pseudoterminal для UI",
+      "status": "done"
+    },
+    {
+      "id": "task-2",
+      "text": "Live test: попробовать terminal sessions после реализации",
+      "status": "done"
+    },
+    {
+      "id": "task-3",
+      "text": "Embeddings client: вызов api.onlysq.ru/ai/openai/embeddings через AuthService",
+      "status": "done"
+    },
+    {
+      "id": "task-4",
+      "text": "Индексатор воркспейса + хранилище .onlysq/index.json (chunks + embeddings)",
+      "status": "done"
+    },
+    {
+      "id": "task-5",
+      "text": "Тул semantic_search + команды onlysq.reindex / onlysq.dropIndex",
+      "status": "done"
+    },
+    {
+      "id": "task-6",
+      "text": "Персистентность задач: сохранять agentTasks в .onlysq/tasks.json (чтобы переживали reload)",
+      "status": "done"
+    },
+    {
+      "id": "task-7",
+      "text": "Memory UI: панель + кнопка в хедере чата по аналогии с tasks-панелью, но визуально отличающаяся (другая иконка/цвет/раскладка). CRUD для записей памяти.",
+      "status": "done"
+    },
+    {
+      "id": "task-8",
+      "text": "Системный промпт: правило «не знаю» вместо выдумывания + честность про cutoff знаний",
+      "status": "done"
+    },
+    {
+      "id": "task-9",
+      "text": "Создать .onlysq/context.md с описанием стека, путей, конвенций, команд",
+      "status": "done"
+    },
+    {
+      "id": "task-10",
+      "text": "MCP support: spawn MCP-серверов через stdio, прокси их tools в общий ToolRegistry, конфиг в .onlysq/mcp.json",
+      "status": "done"
+    },
+    {
+      "id": "task-11",
+      "text": "MCP UI: панель управления MCP серверами в хедере чата (включить/отключить, перезагрузить, посмотреть тулы, редактировать конфиг)",
+      "status": "done"
+    },
+    {
+      "id": "task-12",
+      "text": "Унифицировать визуальный язык свечения панелей: settings, chats, modelPicker, mentionPopup и т.д.",
+      "status": "done"
+    },
+    {
+      "id": "task-13",
+      "text": "Cancel button для run_command / run_command_interactive / terminal: кнопка отмены в live-плашке + kill процесса",
+      "status": "done"
+    },
+    {
+      "id": "task-14",
+      "text": "Cancel button: довести до конца — интеграция в shell + terminal тулы + UI кнопка",
+      "status": "done"
+    }
+  ]
+}

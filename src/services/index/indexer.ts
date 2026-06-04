@@ -7,7 +7,7 @@ import { EmbeddingsClient } from "../llm/embeddingsClient";
 const INDEX_PATH = ".onlysq/index.json";
 const INDEX_VERSION = 1;
 
-const DEFAULT_MODEL = "text-embedding-3-small";
+const DEFAULT_MODEL = "gemini-embedding-001";
 const CHUNK_MAX_CHARS = 1500;
 const CHUNK_OVERLAP_CHARS = 200;
 const BATCH_SIZE = 64;

@@ -67,6 +67,7 @@ export const TOOL_DEFAULTS: Record<string, ToolPolicy> = {
 export interface Settings {
     chatModel: string;
     completionModel: string;
+    embeddingModel: string;
     inlineEnabled: boolean;
     autoTrigger: boolean;
     contextLinesBefore: number;
@@ -95,6 +96,7 @@ export function settings(): Settings {
     return {
         chatModel: c.get("chatModel", "gpt-4o-mini"),
         completionModel: c.get("completionModel", "gpt-4o-mini"),
+        embeddingModel: c.get("embeddingModel", "gemini-embedding-001"),
         inlineEnabled: c.get("inlineCompletions.enabled", true),
         autoTrigger: c.get("inlineCompletions.autoTrigger", true),
         contextLinesBefore: c.get("inlineCompletions.linesBefore", 80),
@@ -118,6 +120,7 @@ export async function updateSetting<K extends keyof Settings>(
     const map: Record<string, string> = {
         chatModel: "chatModel",
         completionModel: "completionModel",
+        embeddingModel: "embeddingModel",
         inlineEnabled: "inlineCompletions.enabled",
         autoTrigger: "inlineCompletions.autoTrigger",
         contextLinesBefore: "inlineCompletions.linesBefore",

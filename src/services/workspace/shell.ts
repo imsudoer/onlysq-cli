@@ -1,6 +1,7 @@
 import * as cp from "child_process";
 import { systemInfo } from "../../core/systemInfo";
 import { root } from "./fs";
+import { Logger } from "../../core/logger";
 
 export interface ShellResult {
     command: string;
@@ -34,6 +35,7 @@ export function executeShell(
         const maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES;
 
         const { exe, args } = wrapForShell(command, sys.shell);
+        Logger.log(`[shell] exec via ${sys.shell}: ${command.length > 200 ? command.slice(0, 200) + "\u2026" : command}`);
 
         let stdout = "";
         let stderr = "";

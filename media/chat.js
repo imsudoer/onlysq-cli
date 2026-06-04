@@ -586,7 +586,12 @@
 
         const head = el("div", "msg-head", m);
         const r = el("span", "role", head);
-        r.textContent = role === "user" ? "You" : "OnlySq";
+        if (role === "user") {
+            r.textContent = "You";
+        } else {
+            var modelName = currentModel || "assistant";
+            r.innerHTML = '<span class="role-model">' + escapeHtml(modelName) + '</span>';
+        }
 
         const actions = el("span", "msg-actions", head);
         if (role === "user") {

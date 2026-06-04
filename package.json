@@ -2,7 +2,7 @@
     "name": "onlysq-cli",
     "displayName": "OnlySq CLI",
     "description": "AI coding assistant by OnlySq — inline completions, chat, and agent mode with native diff previews",
-    "version": "0.2.236",
+    "version": "0.2.237",
     "publisher": "subashev",
     "repository": {
         "type": "git",
@@ -186,6 +186,19 @@
                     "type": "string",
                     "default": "gpt-4o-mini",
                     "description": "Model for inline completions."
+                },
+                "onlysq.embeddingModel": {
+                    "type": "string",
+                    "default": "gemini-embedding-001",
+                    "enum": [
+                        "gemini-embedding-001",
+                        "gemini-embedding-2",
+                        "pplx-embed-v1-0.6b",
+                        "pplx-embed-v1-4b",
+                        "pplx-embed-context-v1-0.6b",
+                        "pplx-embed-context-v1-4b"
+                    ],
+                    "description": "Model for workspace semantic search index. Changing this requires reindex."
                 },
                 "onlysq.inlineCompletions.enabled": {
                     "type": "boolean",
