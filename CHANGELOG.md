@@ -1,5 +1,63 @@
 # Changelog
 
+## 0.2.237 — 2026-06-04
+
+### Semantic Search
+- **Workspace indexer** — incremental chunking of all workspace files with embedding vectors.
+- **`semantic_search` tool** — agent searches code by meaning, not literal text. Returns top-K ranked chunks with file path, line range, and score.
+- **`OnlySq: Reindex Workspace`** command with progress notification and cancel support.
+- **`OnlySq: Drop Semantic Index`** command.
+- **Configurable embedding model** — `gemini-embedding-001` (default), `gemini-embedding-2`, `pplx-embed-*` family.
+- **Hot cache** — 10-second in-memory cache of the index for fast sequential searches.
+- **FileSystemWatcher** on `.onlysq/index.json` — cache auto-invalidates on external changes.
+
+### MCP (Model Context Protocol)
+- **Full MCP support** via `@modelcontextprotocol/sdk` — spawn stdio-based MCP servers, proxy their tools into the agent's tool registry.
+- **`.onlysq/mcp.json`** config — supports both `servers` and `mcpServers` keys (compatible with Cursor/Claude Desktop).
+- **MCP panel** in chat header (green-cyan palette) — add, remove, enable/disable, restart servers. View tools per server with expandable list.
+- **Hot reload** — `FileSystemWatcher` on `mcp.json` auto-restarts servers on save.
+- **Commands**: `MCP — Edit Config`, `MCP — Reload Servers`, `MCP — Status`.
+
+### Memory UI
+- **Memory panel** in chat header (violet palette) — full CRUD for persistent agent memories.
+- **Search** — instant filter by key or value.
+- **Inline editing** — click key to rename (contenteditable), click value to edit. Ctrl+Enter to save.
+- **Collapsible values** — long values auto-collapse with "Show more / Show less" toggle.
+- **Badge** on header button — shows total memory count.
+- **`MemoryStore`** now emits `onChange` events + `rename(oldKey, newKey)` method.
+
+### Terminal Sessions
+- **Live terminal sharing** — user types in a terminal → agent receives `(User just typed in a live terminal...)` system message before next step.
+- **`peek` action** — view terminal buffer without clearing it.
+- **User input tracking** — `userInputBuffer`, `userInputChars`, `lastUserInputAt` per session.
+- **Global `onUserInput` emitter** — real-time events for all subscribers.
+- **`list` action** enhanced — shows `user-typed=Nch` if there's unprocessed input.
+- **`read` action** enhanced — appends `[USER TYPED in terminal since last read]` block.
+
+### Cancel Button
+- **Cancel button** on `run_command`, `run_command_interactive`, and `terminal` tool blocks.
+- Red `×` button appears next to spinner while tool is running.
+- Sends `SIGTERM` → waits 1.5s → `SIGKILL` to the child process.
+- `cancelRegistry` — central register/unregister/cancel mechanism for tool calls.
+
+### UI / Design
+- **Model badge** — assistant messages show the model name (e.g. `claude-opus-4-7`) in a styled badge instead of "OnlySq".
+- **Token reveal animation** — streaming text appears character-by-character with wave effect (`wrapFreshTokens`). Up to 50 chars animated per token, 260ms cubic-bezier, staggered by 8ms per char.
+- **Unified panel glow** — all floating panels share the same visual language:
+  - Tasks — orange (`#fd6b03`)
+  - Memory — violet (`#8b78ff`)
+  - MCP — green-cyan (`#2ec4b6`)
+  - Chats, modals, mention popup, export menu, multi-diff bar — orange accent glow
+- **Tasks panel upgraded** — orange border glow, gradient header, accent-colored title, hover effect on icon.
+- **Task markers in history** — loading a saved chat now renders `create_task` / `update_task` / `delete_task` as compact markers (dot + label) instead of full tool blocks.
+
+### Agent
+- **System prompt rule #14** — agent is instructed to acknowledge user terminal input and adjust behavior.
+- **System prompt rule #15** — agent must say "I don't know" instead of confabulating; verify via tools.
+- **`ToolRegistry`** — added `unregister`, `unregisterPrefix`, `has` methods for MCP tool lifecycle.
+
+---
+
 ## 0.2.0 & 0.2.1 — 2026-06-02
 
 ### Sub-agents
@@ -51,21 +109,7 @@
 - **Context pins** — pin files as persistent context for the session.
 - **Image preview** — attached images show thumbnail previews in the composer.
 
-## 0.1.0 — 2026-06-01
-
-- Initial release.
-- Chat, agent mode, inline completions.
-- Apply/Reject diff preview for file edits.
-- Token usage in status bar.
-- Persistent chat history.
-
-## 0.1.6
-
-- Added smooth scroll, etc.
-
-## 0.1.7
-
-- New fileedit tool, smoother animations, scroll fix
+---
 
 ## 0.1.8 — 2026-06-02
 
@@ -73,3 +117,19 @@
 - **ask_user tool** — agent asks questions with free-form or multiple-choice; UI renders interactive cards.
 - **Streaming animations** — thin blinking cursor, 3-dot bounce status pill, slide-in chunks.
 - **Disabled auto-trim during runs** — DOM no longer randomly cleared mid-agent.
+
+## 0.1.7
+
+- New file-edit tool, smoother animations, scroll fix.
+
+## 0.1.6
+
+- Smooth scroll and minor improvements.
+
+## 0.1.0 — 2026-06-01
+
+- Initial release.
+- Chat, agent mode, inline completions.
+- Apply/Reject diff preview for file edits.
+- Token usage in status bar.
+- Persistent chat history.
