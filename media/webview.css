@@ -597,16 +597,18 @@ button.icon-btn.on {
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 10px;
+    font-size: 14px;
+    line-height: 1;
     flex-shrink: 0;
     z-index: 1;
-    color: #fff;
+    background: transparent;
+    border: 1.5px solid;
     font-weight: 700;
 }
-.task-dot.created { background: var(--accent); }
-.task-dot.updated { background: #e3b341; }
-.task-dot.completed { background: var(--ok); }
-.task-dot.deleted { background: var(--err); opacity: 0.8; }
+.task-dot.created { border-color: var(--accent); color: var(--accent); }
+.task-dot.updated { border-color: #e3b341; color: #e3b341; }
+.task-dot.completed { border-color: var(--ok); color: var(--ok); }
+.task-dot.deleted { border-color: var(--err); color: var(--err); opacity: 0.85; }
 .task-line {
     height: 2px;
     width: 40px;
@@ -940,9 +942,10 @@ button.icon-btn.on {
 
 .send-btn,
 .stop-btn {
-    width: 28px;
-    height: 28px;
-    border-radius: 50%;
+    height: 26px;
+    min-width: 32px;
+    padding: 0 8px;
+    border-radius: 5px;
     border: 1px solid var(--border);
     background: transparent;
     color: var(--muted);
@@ -952,7 +955,6 @@ button.icon-btn.on {
     align-items: center;
     justify-content: center;
     transition: all 0.15s ease;
-    padding: 0;
 }
 .send-btn svg,
 .stop-btn svg {
@@ -992,9 +994,10 @@ button.icon-btn.on {
 }
 
 .pause-btn {
-    width: 28px;
-    height: 28px;
-    border-radius: 50%;
+    height: 26px;
+    min-width: 32px;
+    padding: 0 8px;
+    border-radius: 5px;
     border: 1px solid var(--border);
     background: transparent;
     color: var(--muted);
@@ -1004,7 +1007,6 @@ button.icon-btn.on {
     align-items: center;
     justify-content: center;
     transition: all 0.15s ease;
-    padding: 0;
 }
 .pause-btn svg {
     width: 14px;
@@ -1451,6 +1453,63 @@ button.icon-btn.on {
     margin-top: 2px;
     font-family: var(--vscode-editor-font-family);
 }
+.tasks-item .ti-dot {
+    cursor: pointer;
+    transition: transform 0.12s ease;
+}
+.tasks-item .ti-dot:hover {
+    transform: scale(1.15);
+}
+.tasks-item .ti-del {
+    flex-shrink: 0;
+    width: 18px;
+    height: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    background: transparent;
+    color: var(--dim);
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.12s, color 0.12s;
+    border-radius: 3px;
+    font-size: 14px;
+    line-height: 1;
+}
+.tasks-item:hover .ti-del {
+    opacity: 1;
+}
+.tasks-item .ti-del:hover {
+    color: var(--err);
+    background: rgba(248, 81, 73, 0.1);
+}
+.tasks-item .ti-text {
+    cursor: text;
+}
+.tasks-item .ti-text[contenteditable="true"] {
+    outline: 1px solid var(--accent);
+    background: var(--input-bg, rgba(255,255,255,0.04));
+    padding: 2px 4px;
+    margin: -2px -4px;
+    border-radius: 3px;
+}
+.tasks-add-row {
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--border-soft);
+    background: var(--panel2);
+}
+.tasks-add-row input {
+    width: 100%;
+    box-sizing: border-box;
+    background: var(--bg);
+    border: 1px solid var(--accent);
+    border-radius: 4px;
+    padding: 5px 8px;
+    color: var(--fg);
+    font-size: 12px;
+    outline: none;
+}
 .chats-head {
     display: flex;
     gap: 6px;
@@ -1637,6 +1696,11 @@ button.icon-btn.on {
 .setting-row:last-child {
     border-bottom: none;
 }
+.tp-row[data-policy="always"] .setting-label { color: var(--fg); }
+.tp-row[data-policy="ask"] .setting-label { color: #e3b341; }
+.tp-row[data-policy="never"] .setting-label { color: var(--err); }
+.tp-row[data-policy="disabled"] .setting-label { color: var(--dim); opacity: 0.6; text-decoration: line-through; }
+.tp-select { min-width: 80px; }
 .setting-label {
     color: var(--fg);
     flex: 1;
@@ -1809,80 +1873,127 @@ button.icon-btn.on {
 /* ========== Ask User ========== */
 
 .ask-user-block {
-    margin: 12px 0;
-    padding: 12px 14px;
+    position: relative;
+    margin: 14px 4px;
+    padding: 14px 16px 14px 44px;
     border: 1px solid var(--accent-line);
-    border-left: 3px solid var(--accent);
-    border-radius: 4px;
-    background: var(--accent-soft);
-    animation: askIn 0.25s ease-out;
+    border-radius: 8px;
+    background: linear-gradient(135deg, var(--accent-soft) 0%, rgba(253, 107, 3, 0.02) 100%);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18), 0 0 0 1px rgba(253, 107, 3, 0.04);
+    animation: askIn 0.28s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.ask-user-block::before {
+    content: "?";
+    position: absolute;
+    top: 14px;
+    left: 14px;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: #fff;
+    font-size: 13px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 2px 8px rgba(253, 107, 3, 0.4);
 }
 @keyframes askIn {
-    from { opacity: 0; transform: translateY(4px); }
-    to   { opacity: 1; transform: translateY(0); }
+    from { opacity: 0; transform: translateY(6px) scale(0.985); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
 }
 .ask-question {
     font-size: 13px;
     line-height: 1.55;
     color: var(--fg);
-    margin-bottom: 10px;
+    margin-bottom: 12px;
+    font-weight: 500;
 }
 .ask-question p { margin: 0 0 4px; }
+.ask-question p:last-child { margin-bottom: 0; }
 .ask-options {
     display: flex;
     flex-direction: column;
-    gap: 6px;
     margin-bottom: 10px;
+    border-top: 1px solid var(--border-soft);
 }
+.ask-options.cols-2 { flex-direction: column; }
 .ask-option {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 6px 10px;
-    border: 1px solid var(--border);
-    border-radius: 4px;
+    padding: 6px 4px;
+    border-bottom: 1px solid var(--border-soft);
+    background: transparent;
     cursor: pointer;
     font-size: 12px;
-    transition: border-color 0.15s, background 0.15s;
+    line-height: 1.4;
+    transition: background 0.12s, color 0.12s;
 }
 .ask-option:hover {
-    border-color: var(--accent);
     background: rgba(253, 107, 3, 0.06);
+    color: var(--accent);
 }
 .ask-option input {
     accent-color: var(--accent);
     margin: 0;
+    flex-shrink: 0;
 }
-.ask-option input:checked + span {
+.ask-option input:checked ~ span {
     color: var(--accent);
-    font-weight: 500;
+    font-weight: 600;
+}
+.ask-option:has(input:checked) {
+    color: var(--accent);
 }
 .ask-input-wrap {
     margin-bottom: 10px;
 }
 .ask-input {
     width: 100%;
-    background: var(--input-bg);
+    box-sizing: border-box;
+    background: var(--bg);
     color: var(--input-fg);
     border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 7px 9px;
+    border-radius: 6px;
+    padding: 8px 10px;
     font-family: inherit;
     font-size: 13px;
     line-height: 1.4;
     resize: vertical;
     outline: none;
-    min-height: 36px;
+    min-height: 40px;
+    transition: border-color 0.15s, box-shadow 0.15s;
 }
-.ask-input:focus { border-color: var(--accent); }
+.ask-input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(253, 107, 3, 0.15);
+}
 .ask-actions {
     display: flex;
-    gap: 6px;
+    gap: 8px;
+    justify-content: flex-end;
+}
+.ask-actions .btn.primary {
+    min-width: 90px;
+}
+.ask-hint {
+    font-size: 10px;
+    color: var(--dim);
+    margin-top: 6px;
+    text-align: right;
+    font-family: var(--vscode-editor-font-family);
 }
 .ask-user-answered {
-    margin: 8px 0;
+    margin: 8px 4px;
     padding: 6px 10px;
-    animation: fadeIn 0.2s ease-out;
+    border-radius: 4px;
+    background: rgba(63, 185, 80, 0.06);
+    border: 1px solid rgba(63, 185, 80, 0.2);
+    display: inline-flex;
+    align-self: flex-start;
+    animation: fadeIn 0.25s ease-out;
 }
 .ask-answered-badge {
     font-size: 12px;
@@ -2119,6 +2230,9 @@ button.icon-btn.on {
 
 /* ========== Multi-diff Apply All / Reject All bar ========== */
 .multi-diff-bar {
+    position: sticky;
+    top: 0;
+    z-index: 30;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -2126,8 +2240,10 @@ button.icon-btn.on {
     border: 1px solid var(--accent-line);
     border-radius: 4px;
     padding: 6px 10px;
-    margin: 8px 0;
+    margin: 4px 6px 8px 6px;
     font-size: 12px;
+    backdrop-filter: blur(6px);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
     animation: chunkIn 0.2s ease-out both;
 }
 .multi-diff-bar .mdb-label {

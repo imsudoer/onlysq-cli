@@ -2,7 +2,16 @@ import * as vscode from "vscode";
 import { OpenAIClient } from "../services/llm/openaiClient";
 import { ChatMessage } from "../services/llm/types";
 import { ToolRegistry } from "../features/agent/toolRegistry";
-import { getAgentTasks, onAgentTasksChange, clearAgentTasks } from "../features/agent/tools";
+import {
+    getAgentTasks,
+    onAgentTasksChange,
+    clearAgentTasks,
+    addUserTask,
+    editTaskText,
+    setTaskStatus,
+    deleteAgentTask,
+    onEditResultEvent,
+} from "../features/agent/tools";
 import { runAgent } from "../features/agent/loop";
 import { AuthService, AuthState } from "../services/auth/authService";
 import { ModelsService } from "../services/llm/modelsService";
@@ -10,7 +19,7 @@ import { buildHtml, nonce } from "./webview/shared";
 import { Logger } from "../core/logger";
 import { ChatStore, ChatSession } from "../services/chat/chatStore";
 import { systemBriefForLLM } from "../core/systemInfo";
-import { sanitizeHistoryForApi } from "../services/llm/historyUtils";
+import { sanitizeHistoryForApi, stripToolMessages } from "../services/llm/historyUtils";
 import { settings, updateSetting, SAUTH } from "../core/config";
 import { MemoryStore } from "../services/memory/memoryStore";
 
@@ -56,8 +65,12 @@ const CHAT_BODY = `
 <div id="tasksPanel" class="tasks-panel" style="display:none">
   <div class="tasks-head">
     <span class="tasks-title">Agent tasks</span>
+    <button class="icon-btn" id="tasksAddBtn" title="Add task"><svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
     <button class="btn ghost small" id="tasksClearBtn" title="Clear all">Clear</button>
     <button class="icon-btn" id="tasksCloseBtn" title="Close"><svg viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+  </div>
+  <div id="tasksAddRow" class="tasks-add-row" style="display:none">
+    <input type="text" id="tasksAddInput" placeholder="New task… (Enter to add, Esc to cancel)" />
   </div>
   <div id="tasksBody" class="tasks-body"><div class="tasks-empty">No tasks yet.</div></div>
 </div>
@@ -260,6 +273,10 @@ export class ChatView implements vscode.WebviewViewProvider {
         const unsubTasks = onAgentTasksChange(() => this.pushTasks());
         this.subs.push({ dispose: unsubTasks });
         this.pushTasks();
+        const unsubEdit = onEditResultEvent((id, state) => {
+            this.view?.webview.postMessage({ type: "editResult", id, state });
+        });
+        this.subs.push({ dispose: unsubEdit });
         this.subs.push(
             vscode.workspace.onDidChangeConfiguration((e) => {
                 if (e.affectsConfiguration("onlysq")) {
@@ -516,6 +533,30 @@ export class ChatView implements vscode.WebviewViewProvider {
 
             case "clearTasks":
                 clearAgentTasks();
+                return;
+
+            case "addTask":
+                if (typeof m.text === "string" && m.text.trim()) {
+                    addUserTask(m.text.trim(), m.status || "todo");
+                }
+                return;
+
+            case "editTask":
+                if (typeof m.id === "string" && typeof m.text === "string") {
+                    editTaskText(m.id, m.text);
+                }
+                return;
+
+            case "setTaskStatus":
+                if (typeof m.id === "string" && (m.status === "todo" || m.status === "in_progress" || m.status === "done")) {
+                    setTaskStatus(m.id, m.status);
+                }
+                return;
+
+            case "deleteTask":
+                if (typeof m.id === "string") {
+                    deleteAgentTask(m.id);
+                }
                 return;
 
             case "setSetting":
@@ -782,13 +823,19 @@ export class ChatView implements vscode.WebviewViewProvider {
         const rules = await this.readRulesFile();
         const memCtx = this.memory?.toContext() ?? "";
         const systemPrompt = `You are OnlySq CLI, a coding assistant inside VS Code.
-    - Answer in Markdown with fenced code blocks (\`\`\`lang).
+    You are in CHAT mode: you have NO tools. Reply with plain text and Markdown only.
+    Do NOT emit tool calls, JSON tool-call blocks, function-call XML, or anything that looks like an invocation
+    (e.g. <function=...>, \`\`\`tool, propose_edit(...), etc). Even if previous turns show tool usage, ignore that pattern — this turn is text-only.
+    If the user needs you to actually run / edit / delegate — tell them to switch to Agent mode.
+
+    Style:
+    - Answer in Markdown with fenced code blocks (\`\`\`lang) for code.
     - Be concise. Prefer code over prose when code is the answer.
-    
+
     --- System context ---
     ${systemBriefForLLM()}${rules}${memCtx}`;
 
-        const cleanHistory = sanitizeHistoryForApi(this.history);
+        const cleanHistory = stripToolMessages(this.history);
         const messages: ChatMessage[] = [
             { role: "system", content: systemPrompt },
             ...cleanHistory,
@@ -835,8 +882,8 @@ export class ChatView implements vscode.WebviewViewProvider {
         const rules = await this.readRulesFile();
         const memCtx = this.memory?.toContext() ?? "";
         const planCtx = planOnly
-            ? "\n\n--- PLAN MODE ---\nYou are in PLAN mode. You can ONLY read and analyze — do NOT modify any files, run commands, or make changes. Output a structured plan with numbered steps. Use only read-only tools."
-            : "";
+            ? "\n\n--- PLAN MODE (current turn) ---\nYou are in PLAN mode. You can ONLY read and analyze \u2014 do NOT modify any files, run commands, or make changes. Output a structured plan with numbered steps. Use only read-only tools. Ignore any prior turn that may have been in AGENT mode \u2014 this turn is plan-only."
+            : "\n\n--- AGENT MODE (current turn) ---\nYou are in AGENT mode for THIS turn. You CAN modify files, run commands, delegate, and execute changes. Previous turns may have been in PLAN mode (read-only) \u2014 that restriction is OVER. If the user previously asked for a plan, NOW is the time to execute it. Do not refuse to act citing a plan-mode rule \u2014 it no longer applies.";
         const cleanHistory = sanitizeHistoryForApi(this.history);
         let stepNum = 0;
         const updated = await runAgent(
@@ -1149,6 +1196,10 @@ export class ChatView implements vscode.WebviewViewProvider {
         );
         await this.persistActive();
         this.pushHistoryWindow("replace");
+        this.view?.webview.postMessage({
+            type: "append-user",
+            text: newText.trim(),
+        });
         this.pushChatList();
 
         Logger.log("[chat] editMessageAt: starting handleSend");

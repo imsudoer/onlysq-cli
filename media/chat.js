@@ -68,6 +68,9 @@
     const tasksBody = $("tasksBody");
     const tasksClearBtn = $("tasksClearBtn");
     const tasksCloseBtn = $("tasksCloseBtn");
+    const tasksAddBtn = $("tasksAddBtn");
+    const tasksAddRow = $("tasksAddRow");
+    const tasksAddInput = $("tasksAddInput");
     var currentTasks = [];
     const mentionPopup = $("mentionPopup");
     const dropOverlay = $("dropOverlay");
@@ -81,6 +84,7 @@
     let currentModel = "";
     let models = [];
     let toolBlocks = new Map(); // id -> element
+    let toolArgs = new Map(); // id -> args (cached from tool-call to use at tool-result)
     let statusPill = null;
     let chatsState = { list: [], activeId: null };
     let chatsQuery = "";
@@ -606,6 +610,8 @@
             msgEl.classList.remove("editing");
             if (commit && next.trim()) {
                 var idx = visibleIndexOf(msgEl);
+                msgEl.dataset.raw = next;
+                body.innerHTML = renderMarkdown(next);
                 vscode.postMessage({
                     type: "editMessage",
                     index: idx,
@@ -735,27 +741,61 @@
 
         const approval = el("section", "card", settingsBody);
         approval.innerHTML = '<div class="card-title">Tool Policy</div>' +
-            '<div class="small muted" style="margin-bottom:8px">Per-tool: always (auto-approve) / ask (prompt) / never (deny) / disabled (hide from agent)</div>';
+            '<div class="small muted" style="margin-bottom:8px">Per-tool: <b>always</b> (auto-approve) / <b>ask</b> (prompt) / <b>never</b> (deny) / <b>disabled</b> (hide from agent)</div>';
         var policy = values["agent.toolPolicy"] || {};
         var toolGroups = {
             "Read-only": ["read_file","list_dir","list_tree","search","find_files","file_info","find_in_file",
                 "open_file","goto_position","get_cursor","get_selection","list_open_files","get_diagnostics",
                 "list_tasks","git_status","git_diff","workspace_info","system_info","read_project_context","get_my_config"],
             "File edits": ["propose_edit","apply_at_line","replace_in_file","patch_file","delete_file","rename_file","update_project_context"],
-            "Shell / commands": ["run_command","run_command_interactive","run_task","run_vscode_command","open_in_browser","git_commit"],
+            "Shell / commands": ["run_command","run_command_interactive","terminal","run_task","run_vscode_command","open_in_browser","git_commit"],
             "Web": ["fetch_url","web_search","scrape_page"],
+            "Memory": ["add_memory","get_memory","view_memories","delete_memory"],
+            "Tasks": ["create_task","update_task","delete_task","list_agent_tasks"],
             "Meta": ["pause_agent","ask_user","delegate"],
         };
+
+        function sendBulkPolicy(deltaObj) {
+            for (var k in deltaObj) policy[k] = deltaObj[k];
+            vscode.postMessage({ type: "setSetting", key: "agent.toolPolicy", value: deltaObj });
+        }
+
+        var bulkBar = el("div", "tp-bulk-bar", approval);
+        bulkBar.style.cssText = "display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--border-soft)";
+        var bulkLabel = el("span", "small muted", bulkBar);
+        bulkLabel.style.cssText = "align-self:center;margin-right:auto";
+        bulkLabel.textContent = "Set all tools to:";
+        ["always","ask","never"].forEach(function(v) {
+            var b = el("button", "btn ghost small", bulkBar);
+            b.textContent = v;
+            b.addEventListener("click", function() {
+                var delta = {};
+                Object.values(toolGroups).forEach(function(arr) {
+                    arr.forEach(function(tn) { delta[tn] = v; });
+                });
+                sendBulkPolicy(delta);
+            });
+        });
+
         Object.entries(toolGroups).forEach(function(entry) {
             var groupName = entry[0], toolNames = entry[1];
             var sub = el("div", "", approval);
-            sub.style.marginBottom = "8px";
-            var subTitle = el("div", "small muted", sub);
-            subTitle.style.fontWeight = "600";
-            subTitle.style.marginBottom = "4px";
+            sub.style.marginBottom = "10px";
+            var head = el("div", "", sub);
+            head.style.cssText = "display:flex;align-items:center;gap:6px;margin-bottom:4px";
+            var subTitle = el("div", "small muted", head);
+            subTitle.style.cssText = "font-weight:600;flex:1";
             subTitle.textContent = groupName;
+            var groupAllBtn = el("button", "btn ghost small", head);
+            groupAllBtn.textContent = "all \u2192 always";
+            groupAllBtn.style.cssText = "font-size:10px;padding:1px 6px";
+            groupAllBtn.addEventListener("click", function() {
+                var delta = {};
+                toolNames.forEach(function(tn) { delta[tn] = "always"; });
+                sendBulkPolicy(delta);
+            });
             toolNames.forEach(function(tn) {
-                var row = el("div", "setting-row", sub);
+                var row = el("div", "setting-row tp-row", sub);
                 row.style.padding = "2px 0";
                 var lab = el("label", "setting-label", row);
                 lab.textContent = tn;
@@ -763,10 +803,10 @@
                 lab.style.fontFamily = "var(--vscode-editor-font-family)";
                 var ctl = el("div", "setting-control", row);
                 var sel = document.createElement("select");
-                sel.className = "setting-input";
+                sel.className = "setting-input tp-select";
                 sel.style.fontSize = "10px";
                 sel.style.padding = "1px 4px";
-                var cur = policy[tn] || "";
+                var cur = policy[tn] || "ask";
                 ["always","ask","never","disabled"].forEach(function(v) {
                     var o = document.createElement("option");
                     o.value = v;
@@ -774,9 +814,13 @@
                     if (v === cur) o.selected = true;
                     sel.appendChild(o);
                 });
+                sel.dataset.value = cur;
+                row.dataset.policy = cur;
                 ctl.appendChild(sel);
                 sel.addEventListener("change", function() {
                     policy[tn] = sel.value;
+                    sel.dataset.value = sel.value;
+                    row.dataset.policy = sel.value;
                     var delta = {};
                     delta[tn] = sel.value;
                     vscode.postMessage({ type: "setSetting", key: "agent.toolPolicy", value: delta });
@@ -1005,9 +1049,9 @@
         q.innerHTML = renderMarkdown(question);
 
         if (options && options.length) {
-            const form = el("div", "ask-options", wrap);
-            const type = multiSelect ? "checkbox" : "radio";
-            const selected = new Set();
+            var form = el("div", "ask-options", wrap);
+            var type = multiSelect ? "checkbox" : "radio";
+            var selected = new Set();
 
             options.forEach(function (opt) {
                 const label = el("label", "ask-option", form);
@@ -1030,14 +1074,26 @@
                 });
             });
 
-            const actions = el("div", "ask-actions", wrap);
+            var actions = el("div", "ask-actions", wrap);
             var submitBtn = el("button", "btn primary small", actions);
-            submitBtn.textContent = "Reply";
+            submitBtn.textContent = multiSelect ? "Reply" : "Reply";
             submitBtn.disabled = true;
             submitBtn.addEventListener("click", function () {
                 var answer = Array.from(selected).join(", ");
                 submitAnswer(id, answer, wrap);
             });
+            if (!multiSelect) {
+                form.querySelectorAll(".ask-option").forEach(function(lbl) {
+                    lbl.addEventListener("dblclick", function() {
+                        var input = lbl.querySelector("input");
+                        if (input && input.value) {
+                            submitAnswer(id, input.value, wrap);
+                        }
+                    });
+                });
+                var hint = el("div", "ask-hint", wrap);
+                hint.textContent = "Tip: double-click an option to send immediately";
+            }
         } else {
             var inputWrap = el("div", "ask-input-wrap", wrap);
             var ta = document.createElement("textarea");
@@ -1050,6 +1106,8 @@
             var submitBtn2 = el("button", "btn primary small", actions2);
             submitBtn2.textContent = "Reply";
             submitBtn2.disabled = true;
+            var hint2 = el("div", "ask-hint", inputWrap);
+            hint2.textContent = "Ctrl+Enter to send";
             ta.addEventListener("input", function () {
                 submitBtn2.disabled = !ta.value.trim();
             });
@@ -1224,6 +1282,7 @@
         head.addEventListener("click", () => block.classList.toggle("open"));
 
         toolBlocks.set(id, block);
+        if (args && typeof args === "object") toolArgs.set(id, args);
         showStatusPill(describeTool(name, args));
         scrollToBottom();
         return block;
@@ -1294,10 +1353,12 @@
         var block = toolBlocks.get(id);
         if (!block) return;
         var isError = /^Error:/i.test(result || "");
+        var effectiveArgs = args && typeof args === "object" && Object.keys(args).length
+            ? args
+            : (toolArgs.get(id) || {});
 
-        // Task tools: replace standard block with activity widget
         if (TASK_TOOLS[name] && !isError && name !== "list_agent_tasks") {
-            var widget = renderTaskWidget(name, args, result);
+            var widget = renderTaskWidget(name, effectiveArgs, result);
             if (widget) {
                 block.parentNode.insertBefore(widget, block);
                 block.style.display = "none";
@@ -1323,7 +1384,10 @@
                 ? result.slice(0, 4000) + "\n\u2026(truncated)"
                 : result || "";
 
-        if (EDIT_TOOLS.has(name) && !isError) {
+        var autoApplied = /\(auto-approved\)/.test(result || "");
+        var autoRejected = /rejected by approval policy/.test(result || "");
+
+        if (EDIT_TOOLS.has(name) && !isError && !autoApplied && !autoRejected) {
             trackPendingEdit(id);
             const act = el("div", "tool-actions", block);
             const viewBtn = el("button", "btn ghost small", act);
@@ -1336,7 +1400,7 @@
             applyBtn.textContent = "Apply";
             applyBtn.addEventListener("click", () => {
                 applyBtn.disabled = true;
-                applyBtn.textContent = "Applying…";
+                applyBtn.textContent = "Applying\u2026";
                 vscode.postMessage({ type: "applyEdit", id });
             });
 
@@ -1347,8 +1411,28 @@
                 vscode.postMessage({ type: "rejectEdit", id });
             });
 
-            // Cascading Apply All: show on last pending edit if 2+
             updateApplyAllButtons();
+        } else if (EDIT_TOOLS.has(name) && !isError && (autoApplied || autoRejected)) {
+            block.classList.add(autoApplied ? "applied" : "rejected");
+            var actA = el("div", "tool-actions", block);
+            var statusLabel = document.createElement("span");
+            statusLabel.className = "status-label";
+            statusLabel.textContent = autoApplied ? "\u2713 Applied (auto)" : "\u2717 Rejected (policy)";
+            actA.appendChild(statusLabel);
+            var viewBtnA = el("button", "btn ghost small", actA);
+            viewBtnA.textContent = "View diff";
+            viewBtnA.addEventListener("click", function() {
+                vscode.postMessage({ type: "showDiff", id: id });
+            });
+            if (autoApplied) {
+                try {
+                    lastAppliedEditId = id;
+                    var metaEl = block.querySelector(".tmeta");
+                    if (typeof showUndoBar === "function") {
+                        showUndoBar(id, metaEl ? metaEl.textContent : "");
+                    }
+                } catch (e) {}
+            }
         }
 
         scrollToBottom();
@@ -1598,10 +1682,107 @@
         tasksPanel.style.display = visible ? "flex" : "none";
     }
 
+    var NEXT_STATUS = { todo: "in_progress", in_progress: "done", done: "todo" };
+
+    function buildTaskItem(item) {
+        var icon = item.status === "done" ? "\u2713" : (item.status === "in_progress" ? "\u25B6" : "\u2022");
+        var row = document.createElement("div");
+        row.className = "tasks-item " + item.status;
+        row.title = item.text;
+
+        var dot = document.createElement("div");
+        dot.className = "ti-dot";
+        dot.textContent = icon;
+        dot.title = "Click to change status";
+        dot.addEventListener("click", function(e) {
+            e.stopPropagation();
+            var next = NEXT_STATUS[item.status] || "todo";
+            vscode.postMessage({ type: "setTaskStatus", id: item.id, status: next });
+        });
+        row.appendChild(dot);
+
+        var body = document.createElement("div");
+        body.className = "ti-body";
+        var text = document.createElement("div");
+        text.className = "ti-text";
+        text.textContent = item.text;
+        text.title = "Click to edit";
+        text.addEventListener("click", function(e) {
+            if (text.getAttribute("contenteditable") === "true") return;
+            e.stopPropagation();
+            beginEditTaskText(text, item);
+        });
+        body.appendChild(text);
+
+        var meta = document.createElement("div");
+        meta.className = "ti-meta";
+        meta.textContent = item.id;
+        body.appendChild(meta);
+        row.appendChild(body);
+
+        var del = document.createElement("button");
+        del.className = "ti-del";
+        del.innerHTML = "\u00D7";
+        del.title = "Delete task";
+        del.addEventListener("click", function(e) {
+            e.stopPropagation();
+            vscode.postMessage({ type: "deleteTask", id: item.id });
+        });
+        row.appendChild(del);
+        return row;
+    }
+
+    function beginEditTaskText(textEl, item) {
+        textEl.setAttribute("contenteditable", "true");
+        var original = item.text;
+        textEl.focus();
+        var range = document.createRange();
+        range.selectNodeContents(textEl);
+        var sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+        var committed = false;
+        function commit() {
+            if (committed) return;
+            committed = true;
+            textEl.removeAttribute("contenteditable");
+            var val = (textEl.textContent || "").trim();
+            if (!val) {
+                textEl.textContent = original;
+                return;
+            }
+            if (val !== original) {
+                vscode.postMessage({ type: "editTask", id: item.id, text: val });
+            }
+        }
+        function cancel() {
+            if (committed) return;
+            committed = true;
+            textEl.removeAttribute("contenteditable");
+            textEl.textContent = original;
+        }
+        textEl.addEventListener("blur", commit, { once: true });
+        textEl.addEventListener("keydown", function(e) {
+            if (e.key === "Enter") {
+                e.preventDefault();
+                commit();
+                textEl.blur();
+            } else if (e.key === "Escape") {
+                e.preventDefault();
+                cancel();
+                textEl.blur();
+            }
+        });
+    }
+
     function renderTasksPanel() {
         if (!tasksBody) return;
+        tasksBody.innerHTML = "";
         if (!currentTasks.length) {
-            tasksBody.innerHTML = '<div class="tasks-empty">No tasks yet. The agent creates tasks when working on multi-step goals.</div>';
+            var empty = document.createElement("div");
+            empty.className = "tasks-empty";
+            empty.textContent = "No tasks yet. Add one with + above, or let the agent create tasks while working.";
+            tasksBody.appendChild(empty);
             return;
         }
         var groups = { in_progress: [], todo: [], done: [] };
@@ -1614,27 +1795,22 @@
             ["todo", "To do"],
             ["done", "Done"],
         ];
-        var html = "";
         for (var g = 0; g < order.length; g++) {
             var key = order[g][0];
             var label = order[g][1];
             var list = groups[key];
             if (!list.length) continue;
-            html += '<div class="tasks-group"><div class="tasks-group-title">' + label + ' (' + list.length + ')</div>';
+            var group = document.createElement("div");
+            group.className = "tasks-group";
+            var title = document.createElement("div");
+            title.className = "tasks-group-title";
+            title.textContent = label + " (" + list.length + ")";
+            group.appendChild(title);
             for (var j = 0; j < list.length; j++) {
-                var item = list[j];
-                var icon = key === "done" ? "\u2713" : (key === "in_progress" ? "\u25B6" : "\u2022");
-                html += '<div class="tasks-item ' + key + '" title="' + escapeHtml(item.text) + '">' +
-                    '<div class="ti-dot">' + icon + '</div>' +
-                    '<div class="ti-body">' +
-                        '<div class="ti-text">' + escapeHtml(item.text) + '</div>' +
-                        '<div class="ti-meta">' + escapeHtml(item.id) + '</div>' +
-                    '</div>' +
-                '</div>';
+                group.appendChild(buildTaskItem(list[j]));
             }
-            html += '</div>';
+            tasksBody.appendChild(group);
         }
-        tasksBody.innerHTML = html;
     }
 
     function updateTasksBadge() {
@@ -1669,14 +1845,51 @@
             vscode.postMessage({ type: "clearTasks" });
         });
     }
+
+    function showAddRow(visible) {
+        if (!tasksAddRow) return;
+        tasksAddRow.style.display = visible ? "block" : "none";
+        if (visible) {
+            tasksAddInput.value = "";
+            setTimeout(function() { tasksAddInput.focus(); }, 20);
+        }
+    }
+    if (tasksAddBtn) {
+        tasksAddBtn.addEventListener("click", function(e) {
+            e.stopPropagation();
+            var visible = tasksAddRow && tasksAddRow.style.display !== "none";
+            showAddRow(!visible);
+        });
+    }
+    if (tasksAddInput) {
+        tasksAddInput.addEventListener("keydown", function(e) {
+            if (e.key === "Enter") {
+                e.preventDefault();
+                var val = (tasksAddInput.value || "").trim();
+                if (val) {
+                    vscode.postMessage({ type: "addTask", text: val });
+                    tasksAddInput.value = "";
+                }
+            } else if (e.key === "Escape") {
+                e.preventDefault();
+                showAddRow(false);
+            }
+        });
+    }
+
     document.addEventListener("click", function(e) {
         if (!tasksPanel || tasksPanel.style.display === "none") return;
         if (!tasksPanel.contains(e.target) && tasksBtn && !tasksBtn.contains(e.target)) {
             showTasksPanel(false);
+            showAddRow(false);
         }
     });
     document.addEventListener("keydown", function(e) {
         if (e.key === "Escape" && tasksPanel && tasksPanel.style.display !== "none") {
+            if (tasksAddRow && tasksAddRow.style.display !== "none") {
+                showAddRow(false);
+                return;
+            }
             showTasksPanel(false);
         }
     });
@@ -1987,19 +2200,16 @@
                 scrollToBottom();
                 break;
             case "tool-call":
-                // Finalize: remove ghost state if it existed
                 var existingGhost = toolBlocks.get(m.id);
+                if (m.args && typeof m.args === "object") toolArgs.set(m.id, m.args);
                 if (existingGhost && existingGhost.classList.contains("streaming-tool")) {
                     existingGhost.classList.remove("streaming-tool");
-                    // Restore spinner
                     var dots = existingGhost.querySelector(".streaming-dots");
                     if (dots) dots.outerHTML = '<span class="tspinner"></span>';
-                    // Update with real args
                     var metaR = existingGhost.querySelector(".tmeta");
                     if (metaR) metaR.textContent = summarizeArgs(m.name, m.args);
                     var nameR = existingGhost.querySelector(".tname");
                     if (nameR) nameR.textContent = m.name;
-                    // Update body args
                     var bodyR = existingGhost.querySelector(".targs");
                     if (bodyR) bodyR.innerHTML = highlightCode(JSON.stringify(m.args, null, 2));
                 } else {
@@ -2057,6 +2267,12 @@
                 if (m.messages && m.messages.length)
                     renderHistoryMessages(m.messages, false);
                 else renderEmpty();
+                break;
+            case "append-user":
+                if (typeof m.text === "string" && m.text.trim()) {
+                    addMsg("user", m.text, false);
+                    scrollToBottom();
+                }
                 break;
             case "prepend":
                 if (m.messages && m.messages.length) {
@@ -2606,13 +2822,20 @@
     }
 
     function updateMultiDiffBar() {
-        var existing = logBody.querySelector(".multi-diff-bar");
+        var container = logEl || logBody;
+        var existing = container.querySelector(".multi-diff-bar");
         if (pendingEditIds.length < 2) {
             if (existing) existing.remove();
             return;
         }
         if (!existing) {
-            existing = el("div", "multi-diff-bar", logBody);
+            existing = document.createElement("div");
+            existing.className = "multi-diff-bar";
+            if (logBody && logBody.parentNode === container) {
+                container.insertBefore(existing, logBody);
+            } else {
+                container.insertBefore(existing, container.firstChild);
+            }
         }
         existing.innerHTML =
             '<span class="mdb-label">' + pendingEditIds.length + ' pending edits</span>' +

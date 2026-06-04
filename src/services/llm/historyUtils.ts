@@ -1,5 +1,33 @@
 import { ChatMessage } from "./types";
 
+function hasTextContent(c: ChatMessage["content"]): boolean {
+    if (!c) return false;
+    if (typeof c === "string") return c.trim().length > 0;
+    if (Array.isArray(c)) {
+        for (const p of c) {
+            if ((p as any)?.type === "text" && typeof (p as any).text === "string" && (p as any).text.trim()) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+export function stripToolMessages(history: ChatMessage[]): ChatMessage[] {
+    const out: ChatMessage[] = [];
+    for (const m of history) {
+        if (m.role === "tool") continue;
+        if (m.role === "assistant" && m.tool_calls?.length) {
+            if (hasTextContent(m.content)) {
+                out.push({ role: "assistant", content: m.content });
+            }
+            continue;
+        }
+        out.push(m);
+    }
+    return out;
+}
+
 export function sanitizeHistoryForApi(history: ChatMessage[]): ChatMessage[] {
     const out: ChatMessage[] = [];
     for (let i = 0; i < history.length; i++) {

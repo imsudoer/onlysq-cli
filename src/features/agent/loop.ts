@@ -11,6 +11,17 @@ import {
     truncateForPrompt,
 } from "../../services/workspace/projectContext";
 import { SUBAGENTS } from "./subagentDefs";
+import { hasPendingEdits, waitForPendingEdits } from "../../services/workspace/diffPreview";
+
+const WRITE_TOOLS = new Set([
+    "propose_edit",
+    "apply_at_line",
+    "replace_in_file",
+    "patch_file",
+    "update_project_context",
+    "delete_file",
+    "rename_file",
+]);
 
 export type AgentEvent =
     | { type: "token"; text: string }
@@ -262,6 +273,16 @@ export async function runAgent(
                     name: tc.function.name,
                     result: cachedNote,
                 };
+            }
+
+            if (WRITE_TOOLS.has(tc.function.name) && hasPendingEdits()) {
+                Logger.log(`[agent] ${tc.function.name} waiting for pending edits to be resolved by user`);
+                await waitForPendingEdits(signal);
+                if (signal?.aborted) {
+                    const aborted = "Error: cancelled while waiting for pending edits";
+                    onEvent({ type: "tool-result", id: tc.id, name: tc.function.name, result: aborted });
+                    return { id: tc.id, name: tc.function.name, result: aborted };
+                }
             }
 
             const tool = registry.get(tc.function.name);

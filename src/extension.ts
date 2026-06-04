@@ -8,13 +8,14 @@ import { AuthService } from "./services/auth/authService";
 import { OpenAIClient } from "./services/llm/openaiClient";
 import { ModelsService } from "./services/llm/modelsService";
 import { ToolRegistry } from "./features/agent/toolRegistry";
-import { builtinTools, setMemoryStore } from "./features/agent/tools";
+import { builtinTools, setMemoryStore, initAgentTasksStore } from "./features/agent/tools";
 import { MemoryStore } from "./services/memory/memoryStore";
 import { OnlySqInlineProvider } from "./features/completion/provider";
 import { ChatView } from "./ui/chatView";
 import { StatusBar } from "./ui/statusBar";
 import { registerDiffProvider } from "./services/workspace/diffPreview";
 import { disposeTerminal } from "./services/workspace/terminal";
+import { disposeAllSessions } from "./services/workspace/terminalSession";
 import {
     hasProjectContext,
     projectContextPath,
@@ -35,6 +36,7 @@ export async function activate(ctx: vscode.ExtensionContext) {
     const registry = new ToolRegistry();
     registry.registerAll(builtinTools);
     setMemoryStore(memory);
+    initAgentTasksStore(ctx.workspaceState);
 
     registerDiffProvider(ctx);
 
@@ -207,5 +209,6 @@ export async function activate(ctx: vscode.ExtensionContext) {
 
 export function deactivate(): void {
     disposeTerminal();
+    disposeAllSessions();
     Logger.log("Deactivated");
 }

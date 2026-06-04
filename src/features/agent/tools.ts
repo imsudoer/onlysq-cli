@@ -25,6 +25,13 @@ import {
 } from "../../services/workspace/diffPreview";
 import { runInTerminal } from "../../services/workspace/terminal";
 import {
+    openSession,
+    writeToSession,
+    readFromSession,
+    closeSession,
+    listSessions,
+} from "../../services/workspace/terminalSession";
+import {
     executeShell,
     formatShellResult,
 } from "../../services/workspace/shell";
@@ -66,7 +73,51 @@ let taskCounter = 0;
 type TasksListener = (tasks: AgentTask[]) => void;
 const tasksListeners = new Set<TasksListener>();
 
+interface TasksStore {
+    get<T>(key: string, def: T): T;
+    update(key: string, value: any): Thenable<void>;
+}
+let tasksStore: TasksStore | undefined;
+const TASKS_KEY = "onlysq.agentTasks.v1";
+const COUNTER_KEY = "onlysq.agentTasks.counter";
+
+export function initAgentTasksStore(store: TasksStore): void {
+    tasksStore = store;
+    try {
+        const saved = store.get<AgentTask[]>(TASKS_KEY, []);
+        const counter = store.get<number>(COUNTER_KEY, 0);
+        agentTasks.length = 0;
+        if (Array.isArray(saved)) {
+            for (const t of saved) {
+                if (t && typeof t.id === "string" && typeof t.text === "string") {
+                    agentTasks.push({
+                        id: t.id,
+                        text: t.text,
+                        status: (t.status === "todo" || t.status === "in_progress" || t.status === "done") ? t.status : "todo",
+                    });
+                }
+            }
+        }
+        taskCounter = Math.max(counter, ...agentTasks.map((t) => {
+            const m = /^task-(\d+)$/.exec(t.id);
+            return m ? Number(m[1]) : 0;
+        }), 0);
+        if (agentTasks.length) emitTasksChange();
+    } catch {
+        /* ignore corrupted state */
+    }
+}
+
+function persistTasks(): void {
+    if (!tasksStore) return;
+    try {
+        void tasksStore.update(TASKS_KEY, agentTasks.map((t) => ({ ...t })));
+        void tasksStore.update(COUNTER_KEY, taskCounter);
+    } catch { /* ignore */ }
+}
+
 function emitTasksChange(): void {
+    persistTasks();
     const snapshot = agentTasks.map((t) => ({ ...t }));
     for (const l of tasksListeners) {
         try { l(snapshot); } catch { /* ignore */ }
@@ -83,9 +134,44 @@ export function onAgentTasksChange(listener: TasksListener): () => void {
 }
 
 export function clearAgentTasks(): void {
-    if (!agentTasks.length) return;
+    if (!agentTasks.length) {
+        if (tasksStore) persistTasks();
+        return;
+    }
     agentTasks.length = 0;
     emitTasksChange();
+}
+
+export function addUserTask(text: string, status: AgentTask["status"] = "todo"): AgentTask {
+    const id = "task-" + (++taskCounter);
+    const task: AgentTask = { id, text, status };
+    agentTasks.push(task);
+    emitTasksChange();
+    return { ...task };
+}
+
+export function editTaskText(id: string, text: string): boolean {
+    const t = agentTasks.find((x) => x.id === id);
+    if (!t) return false;
+    t.text = text;
+    emitTasksChange();
+    return true;
+}
+
+export function setTaskStatus(id: string, status: AgentTask["status"]): boolean {
+    const t = agentTasks.find((x) => x.id === id);
+    if (!t) return false;
+    t.status = status;
+    emitTasksChange();
+    return true;
+}
+
+export function deleteAgentTask(id: string): boolean {
+    const idx = agentTasks.findIndex((x) => x.id === id);
+    if (idx < 0) return false;
+    agentTasks.splice(idx, 1);
+    emitTasksChange();
+    return true;
 }
 
 const obj = (props: Record<string, any>, required: string[] = []) => ({
@@ -101,6 +187,20 @@ const arr = (items: any, description: string) => ({
     description,
 });
 
+type EditResultListener = (id: string, state: "applied" | "rejected") => void;
+const editResultListeners = new Set<EditResultListener>();
+
+export function onEditResultEvent(listener: EditResultListener): () => void {
+    editResultListeners.add(listener);
+    return () => editResultListeners.delete(listener);
+}
+
+function emitEditResult(id: string, state: "applied" | "rejected"): void {
+    for (const l of editResultListeners) {
+        try { l(id, state); } catch { /* ignore */ }
+    }
+}
+
 async function finalizeEditProposal(
     proposalId: string,
     path: string,
@@ -111,12 +211,14 @@ async function finalizeEditProposal(
     const mode = settings().toolPolicy[toolName] ?? "ask";
     if (mode === "always") {
         await applyProposal(proposalId);
+        emitEditResult(proposalId, "applied");
         return `${actionLabel} applied to ${path} (auto-approved).${
             reason ? `\nReason: ${reason}` : ""
         }`;
     }
     if (mode === "never") {
         rejectProposal(proposalId);
+        emitEditResult(proposalId, "rejected");
         return `${actionLabel} to ${path} rejected by approval policy.`;
     }
     void showDiff(proposalId);
@@ -963,6 +1065,84 @@ export const builtinTools: ToolHandler[] = [
             const full = a.cwd ? `cd "${a.cwd}" && ${a.command}` : a.command;
             runInTerminal(String(full), true);
             return `Started in terminal: ${a.command}`;
+        },
+    },
+
+    {
+        def: {
+            type: "function",
+            function: {
+                name: "terminal",
+                description:
+                    "Long-lived shell session. Spawn a real shell, send commands to its stdin, read accumulated stdout/stderr later, close when done. " +
+                    "Unlike run_command (blocks until process exits) and run_command_interactive (fire-and-forget into VS Code terminal), this lets you keep a session open, send multiple commands, and capture output programmatically. " +
+                    "Actions: " +
+                    "`open` \u2014 start a new session, returns session id. Optional `cwd`. " +
+                    "`write` \u2014 send `text` (or `command`) to the session's stdin. Newline is appended automatically. Returns immediately. " +
+                    "`read` \u2014 wait `wait_ms` (default 1000, max 30000), then return accumulated output and clear buffer. " +
+                    "`close` \u2014 kill the session. " +
+                    "`list` \u2014 list all open sessions. " +
+                    "Typical flow: open \u2192 write \"npm run dev\" \u2192 read (wait 2000) \u2192 write more commands \u2192 close.",
+                parameters: obj(
+                    {
+                        action: {
+                            type: "string",
+                            enum: ["open", "write", "read", "close", "list"],
+                            description: "What to do",
+                        },
+                        id: str("Session id (required for write/read/close)"),
+                        cwd: str("Working directory (open action only, optional, relative to workspace)"),
+                        text: str("Text/command to send to stdin (write action). Newline appended automatically."),
+                        command: str("Alias for `text` (write action)"),
+                        wait_ms: num("How long to wait before returning output, default 1000, max 30000 (read action only)"),
+                        clear: { type: "boolean", description: "Clear buffer after read? Default true (read action only)" },
+                    },
+                    ["action"]
+                ),
+            },
+        },
+        run: async (a: any) => {
+            const action = String(a.action || "");
+            try {
+                if (action === "open") {
+                    if (!(await askToolApproval("terminal", `Open shell session${a.cwd ? " in " + a.cwd : ""}?`))) {
+                        return "User denied terminal session";
+                    }
+                    const s = openSession({ cwd: a.cwd ? String(a.cwd) : undefined });
+                    return `Opened session ${s.id}\nShell: ${s.shell}\nCwd: ${s.cwd}`;
+                }
+                if (action === "write") {
+                    if (!a.id) return "Error: id is required for write";
+                    const text = a.text != null ? String(a.text) : (a.command != null ? String(a.command) : "");
+                    if (!text) return "Error: text or command is required for write";
+                    if (!(await askToolApproval("terminal", `Send to ${a.id}: ${text.slice(0, 80)}`))) {
+                        return "User denied terminal write";
+                    }
+                    writeToSession(String(a.id), text);
+                    return `Wrote ${text.length} chars to ${a.id}`;
+                }
+                if (action === "read") {
+                    if (!a.id) return "Error: id is required for read";
+                    const waitMs = a.wait_ms != null ? Number(a.wait_ms) : 1000;
+                    const clear = a.clear !== false;
+                    const r = await readFromSession(String(a.id), { waitMs, clear });
+                    const head = `Session ${a.id}${r.closed ? ` (closed, exit ${r.exitCode})` : ""} \u2014 ${r.output.length} bytes\n---`;
+                    return r.output.length ? `${head}\n${r.output}` : `${head}\n(no new output)`;
+                }
+                if (action === "close") {
+                    if (!a.id) return "Error: id is required for close";
+                    const ok = closeSession(String(a.id));
+                    return ok ? `Closed ${a.id}` : `Session ${a.id} not found`;
+                }
+                if (action === "list") {
+                    const arr = listSessions();
+                    if (!arr.length) return "(no open sessions)";
+                    return arr.map((s) => `${s.id}  ${s.shell}  cwd=${s.cwd}  ${s.closed ? `closed(exit ${s.exitCode})` : "running"}  buf=${s.bufferBytes}b  age=${Math.round(s.ageMs / 1000)}s`).join("\n");
+                }
+                return `Error: unknown action "${action}". Use open/write/read/close/list.`;
+            } catch (e: any) {
+                return `Error: ${e?.message ?? e}`;
+            }
         },
     },
 

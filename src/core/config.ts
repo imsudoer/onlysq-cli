@@ -57,6 +57,7 @@ export const TOOL_DEFAULTS: Record<string, ToolPolicy> = {
     // Shell / commands
     run_command: "ask", run_command_interactive: "ask", run_task: "ask",
     run_vscode_command: "ask", open_in_browser: "ask", git_commit: "ask",
+    terminal: "ask",
     // Web
     fetch_url: "ask", web_search: "ask", scrape_page: "ask",
 };
