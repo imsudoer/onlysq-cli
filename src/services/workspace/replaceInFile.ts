@@ -13,8 +13,9 @@ export interface ReplaceResult {
         find: string;
         matchCount: number;
         appliedCount: number;
+        fuzzy?: boolean;
     }>;
-    notFound: Array<{ index: number; find: string }>;
+    notFound: Array<{ index: number; find: string; hint?: string }>;
     totalMatches: number;
     totalApplied: number;
 }
@@ -84,6 +85,111 @@ function replaceN(
     return { text: out, replaced };
 }
 
+function squashWs(s: string): string {
+    return s
+        .split("\n")
+        .map((l) => l.replace(/[ \t]+/g, " ").trim())
+        .join("\n");
+}
+
+function findFuzzyRange(
+    haystack: string,
+    needle: string
+): { start: number; end: number } | null {
+    const needleSquashed = squashWs(needle);
+    if (!needleSquashed) return null;
+    const needleLines = needle.split("\n");
+    const haystackLines = haystack.split("\n");
+    const firstNeedleLine = squashWs(needleLines[0]);
+    if (!firstNeedleLine) return null;
+
+    for (let i = 0; i + needleLines.length <= haystackLines.length; i++) {
+        if (squashWs(haystackLines[i]) !== firstNeedleLine) continue;
+        const slice = haystackLines
+            .slice(i, i + needleLines.length)
+            .join("\n");
+        if (squashWs(slice) === needleSquashed) {
+            const start =
+                haystackLines.slice(0, i).reduce((a, l) => a + l.length, 0) + i;
+            const end = start + slice.length;
+            return { start, end };
+        }
+    }
+    return null;
+}
+
+function applyFuzzy(
+    haystack: string,
+    needle: string,
+    replacement: string,
+    limit: number
+): { text: string; replaced: number } {
+    let current = haystack;
+    let replaced = 0;
+    let cursor = 0;
+    while (replaced < limit) {
+        const tail = current.slice(cursor);
+        const range = findFuzzyRange(tail, needle);
+        if (!range) break;
+        const absStart = cursor + range.start;
+        const absEnd = cursor + range.end;
+        current = current.slice(0, absStart) + replacement + current.slice(absEnd);
+        cursor = absStart + replacement.length;
+        replaced++;
+    }
+    return { text: current, replaced };
+}
+
+function levenshtein(a: string, b: string): number {
+    if (a === b) return 0;
+    if (!a.length) return b.length;
+    if (!b.length) return a.length;
+    const m = a.length;
+    const n = b.length;
+    if (Math.abs(m - n) > 200) return Math.max(m, n);
+    let prev = new Array(n + 1);
+    let curr = new Array(n + 1);
+    for (let j = 0; j <= n; j++) prev[j] = j;
+    for (let i = 1; i <= m; i++) {
+        curr[0] = i;
+        for (let j = 1; j <= n; j++) {
+            const cost = a.charCodeAt(i - 1) === b.charCodeAt(j - 1) ? 0 : 1;
+            curr[j] = Math.min(
+                curr[j - 1] + 1,
+                prev[j] + 1,
+                prev[j - 1] + cost
+            );
+        }
+        [prev, curr] = [curr, prev];
+    }
+    return prev[n];
+}
+
+function buildHint(haystack: string, needle: string): string | undefined {
+    const needleFirst = needle.split("\n")[0].trim();
+    if (!needleFirst || needleFirst.length < 4) return undefined;
+    const lines = haystack.split("\n");
+    let bestLine = -1;
+    let bestScore = Number.POSITIVE_INFINITY;
+    const cap = Math.max(needleFirst.length, 80);
+    for (let i = 0; i < lines.length; i++) {
+        const l = lines[i].trim();
+        if (!l) continue;
+        const probe = l.length > cap ? l.slice(0, cap) : l;
+        const d = levenshtein(needleFirst, probe);
+        if (d < bestScore) {
+            bestScore = d;
+            bestLine = i;
+        }
+    }
+    if (bestLine < 0) return undefined;
+    const threshold = Math.max(3, Math.floor(needleFirst.length * 0.4));
+    if (bestScore > threshold) return undefined;
+    const actual = lines[bestLine];
+    const preview = actual.length > 160 ? actual.slice(0, 160) + "…" : actual;
+    return `closest line ${bestLine + 1} (distance ${bestScore}): ${JSON.stringify(preview)}`;
+}
+
 export async function previewReplaceInFile(
     path: string,
     ops: ReplaceOp[]
@@ -114,18 +220,36 @@ export async function previewReplaceInFile(
             notFound.push({ index: i, find: "(empty)" });
             continue;
         }
-        const matchCount = countOccurrences(current, find);
-        if (matchCount === 0) {
-            notFound.push({ index: i, find });
-            continue;
-        }
         const limit =
             op.count && op.count > 0 ? op.count : Number.POSITIVE_INFINITY;
-        const { text, replaced } = replaceN(current, find, replace, limit);
-        current = text;
-        applied.push({ index: i, find, matchCount, appliedCount: replaced });
-        totalMatches += matchCount;
-        totalApplied += replaced;
+
+        const matchCount = countOccurrences(current, find);
+        if (matchCount > 0) {
+            const { text, replaced } = replaceN(current, find, replace, limit);
+            current = text;
+            applied.push({ index: i, find, matchCount, appliedCount: replaced });
+            totalMatches += matchCount;
+            totalApplied += replaced;
+            continue;
+        }
+
+        const fuzzy = applyFuzzy(current, find, replace, limit);
+        if (fuzzy.replaced > 0) {
+            current = fuzzy.text;
+            applied.push({
+                index: i,
+                find,
+                matchCount: fuzzy.replaced,
+                appliedCount: fuzzy.replaced,
+                fuzzy: true,
+            });
+            totalMatches += fuzzy.replaced;
+            totalApplied += fuzzy.replaced;
+            continue;
+        }
+
+        const hint = buildHint(current, find);
+        notFound.push({ index: i, find, hint });
     }
 
     return {

@@ -95,6 +95,11 @@
                 "command": "onlysq.newChat",
                 "title": "New Chat",
                 "category": "OnlySq"
+            },
+            {
+                "command": "onlysq.initProjectContext",
+                "title": "Initialize Project Context",
+                "category": "OnlySq"
             }
         ],
         "viewsContainers": {

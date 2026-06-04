@@ -38,6 +38,12 @@ import {
     previewReplaceInFile,
     ReplaceOp,
 } from "../../services/workspace/replaceInFile";
+import {
+    readProjectContext,
+    writeProjectContext,
+    projectContextPath,
+    hasProjectContext,
+} from "../../services/workspace/projectContext";
 
 const obj = (props: Record<string, any>, required: string[] = []) => ({
     type: "object",
@@ -469,9 +475,10 @@ export const builtinTools: ToolHandler[] = [
                             nf.find.length > 200
                                 ? nf.find.slice(0, 200) + "…"
                                 : nf.find;
-                        return `  [${nf.index}] not found: ${JSON.stringify(
+                        const base = `  [${nf.index}] not found: ${JSON.stringify(
                             preview
                         )}`;
+                        return nf.hint ? `${base}\n      hint: ${nf.hint}` : base;
                     });
                     return (
                         `Error: ${result.notFound.length}/${ops.length} operations did not match. The file was NOT changed.\n` +
@@ -498,8 +505,9 @@ export const builtinTools: ToolHandler[] = [
                     `Replace in ${a.path}: ${result.totalApplied} replacement(s) across ${result.applied.length}/${ops.length} operation(s).`,
                 ];
                 for (const op of result.applied) {
+                    const tag = op.fuzzy ? " (fuzzy: whitespace-tolerant)" : "";
                     summaryLines.push(
-                        `  [${op.index}] ${op.appliedCount}/${op.matchCount} replaced`
+                        `  [${op.index}] ${op.appliedCount}/${op.matchCount} replaced${tag}`
                     );
                 }
                 if (result.notFound.length) {
@@ -971,6 +979,104 @@ export const builtinTools: ToolHandler[] = [
             },
         },
         run: async () => JSON.stringify(systemInfo(), null, 2),
+    },
+
+    {
+        def: {
+            type: "function",
+            function: {
+                name: "read_project_context",
+                description:
+                    "Read the persistent project context file (.onlysq/context.md). " +
+                    "This file holds long-lived notes about the project: stack, structure, conventions, decisions. " +
+                    "It is auto-injected into the agent system prompt at the start of each run. " +
+                    "Returns null if the file does not exist yet.",
+                parameters: obj({}),
+            },
+        },
+        run: async () => {
+            const text = await readProjectContext();
+            if (text === null)
+                return `(${projectContextPath()} does not exist yet — use update_project_context to create it)`;
+            return text;
+        },
+    },
+
+    {
+        def: {
+            type: "function",
+            function: {
+                name: "update_project_context",
+                description:
+                    "Create or fully overwrite the persistent project context file (.onlysq/context.md). " +
+                    "Use this to record durable knowledge about the project: tech stack, important paths, build/test commands, coding conventions, ongoing decisions. " +
+                    "Goes through the normal Apply/Reject diff flow. Keep it concise (under ~6KB) — it is injected into every agent run.",
+                parameters: obj(
+                    {
+                        content: str("Full new content of the context file (markdown)."),
+                        reason: str("Short summary of what changed and why"),
+                    },
+                    ["content"]
+                ),
+            },
+        },
+        run: async (a: any, ctx) => {
+            const proposal = await createProposal({
+                id: ctx.callId,
+                path: projectContextPath(),
+                newContent: String(a.content ?? ""),
+                reason: a.reason
+                    ? String(a.reason)
+                    : "Update project context",
+            });
+            return finalizeEditProposal(
+                proposal.id,
+                projectContextPath(),
+                a.reason ? String(a.reason) : undefined,
+                "Project context update"
+            );
+        },
+    },
+
+    {
+        def: {
+            type: "function",
+            function: {
+                name: "get_my_config",
+                description:
+                    "Return the agent's own runtime configuration: extension version, current chat model, " +
+                    "approval policies, agent limits, registered tool names, whether project context exists. " +
+                    "Use this for self-introspection.",
+                parameters: obj({}),
+            },
+        },
+        run: async () => {
+            const cfg = settings();
+            const ext = vscode.extensions.getExtension(
+                "subashev.onlysq-cli"
+            );
+            const version =
+                (ext?.packageJSON as any)?.version ?? "unknown";
+            const hasCtx = await hasProjectContext();
+            return JSON.stringify(
+                {
+                    extensionVersion: version,
+                    chatModel: cfg.chatModel,
+                    completionModel: cfg.completionModel,
+                    temperature: cfg.temperature,
+                    maxAgentSteps: cfg.maxAgentSteps,
+                    parallelTools: cfg.parallelTools,
+                    toolCache: cfg.toolCache,
+                    approval: cfg.approval,
+                    projectContext: {
+                        path: projectContextPath(),
+                        exists: hasCtx,
+                    },
+                },
+                null,
+                2
+            );
+        },
     },
 
     {

@@ -5,6 +5,11 @@ import { settings } from "../../core/config";
 import { ToolCache } from "./toolCache";
 import { systemBriefForLLM } from "../../core/systemInfo";
 import { Logger } from "../../core/logger";
+import {
+    readProjectContext,
+    projectContextPath,
+    truncateForPrompt,
+} from "../../services/workspace/projectContext";
 
 export type AgentEvent =
     | { type: "token"; text: string }
@@ -53,7 +58,17 @@ export async function runAgent(
     const cfg = settings();
     const cache = new ToolCache(cfg.toolCache);
 
-    const systemPrompt = `${SYSTEM_BASE}\n\n--- System context ---\n${systemBriefForLLM()}`;
+    let systemPrompt = `${SYSTEM_BASE}\n\n--- System context ---\n${systemBriefForLLM()}`;
+    try {
+        const pctx = await readProjectContext();
+        if (pctx) {
+            systemPrompt +=
+                `\n\n--- Project context (from ${projectContextPath()}) ---\n` +
+                truncateForPrompt(pctx);
+        }
+    } catch (e) {
+        Logger.log("[agent] failed to read project context", e);
+    }
 
     const messages: ChatMessage[] = [
         { role: "system", content: systemPrompt },

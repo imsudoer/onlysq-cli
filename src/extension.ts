@@ -14,6 +14,10 @@ import { ChatView } from "./ui/chatView";
 import { StatusBar } from "./ui/statusBar";
 import { registerDiffProvider } from "./services/workspace/diffPreview";
 import { disposeTerminal } from "./services/workspace/terminal";
+import {
+    hasProjectContext,
+    projectContextPath,
+} from "./services/workspace/projectContext";
 
 export async function activate(ctx: vscode.ExtensionContext) {
     Logger.init("OnlySq CLI");
@@ -162,6 +166,26 @@ export async function activate(ctx: vscode.ExtensionContext) {
             matchOnDescription: true,
         });
         if (pick?.label) await updateSetting("completionModel", pick.label);
+    });
+
+    cmd("onlysq.initProjectContext", async () => {
+        if (await hasProjectContext()) {
+            const pick = await vscode.window.showWarningMessage(
+                `${projectContextPath()} already exists. Regenerate it?`,
+                { modal: true },
+                "Regenerate",
+                "Cancel"
+            );
+            if (pick !== "Regenerate") return;
+        }
+        const goal =
+            `Initialize the project context file at ${projectContextPath()}. ` +
+            `Explore the workspace (list_tree, read key files like package.json / README / main entry points), ` +
+            `then call update_project_context with a concise markdown summary covering: ` +
+            `tech stack and frameworks, project structure (key folders / files), ` +
+            `build / test / run commands, coding conventions visible in the code, ` +
+            `any non-obvious decisions or gotchas. Keep it under ~4KB. Do not duplicate the README verbatim.`;
+        await chat.sendPrompt(goal, "agent");
     });
 
     cmd("onlysq.resetUsage", () => usage.reset());
