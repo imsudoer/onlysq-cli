@@ -682,6 +682,41 @@ button.icon-btn.on {
     transition: transform 0.15s;
     flex-shrink: 0;
 }
+.tool-head .tcancel {
+    flex-shrink: 0;
+    width: 18px;
+    height: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid transparent;
+    background: rgba(248, 81, 73, 0.10);
+    color: var(--err);
+    cursor: pointer;
+    border-radius: 4px;
+    padding: 0;
+    margin-right: 2px;
+    transition: background 0.15s, border-color 0.15s, transform 0.1s;
+}
+.tool-head .tcancel svg {
+    stroke: currentColor;
+    fill: none;
+    stroke-width: 2.2;
+    stroke-linecap: round;
+}
+.tool-head .tcancel:hover {
+    background: rgba(248, 81, 73, 0.22);
+    border-color: rgba(248, 81, 73, 0.45);
+}
+.tool-head .tcancel:active {
+    transform: scale(0.92);
+}
+.tool-head .tcancel.tcancel-pressed {
+    opacity: 0.5;
+    cursor: progress;
+    background: rgba(248, 81, 73, 0.05);
+}
+.tool-head .tcancel:disabled { cursor: progress; }
 .tool-block.open .tarrow {
     transform: rotate(90deg);
 }
@@ -2515,6 +2550,19 @@ button.icon-btn.on {
 }
 @keyframes chunkIn {
     from { opacity: 0; transform: translateY(3px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Smooth per-character reveal for streaming tokens */
+.tk-fresh {
+    display: inline-block;
+    opacity: 0;
+    transform: translateY(2px);
+    animation: tkFresh 260ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    will-change: opacity, transform;
+}
+@keyframes tkFresh {
+    from { opacity: 0; transform: translateY(2px); }
     to   { opacity: 1; transform: translateY(0); }
 }
 

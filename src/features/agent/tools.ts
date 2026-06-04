@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { Logger } from "../../core/logger";
 import { ToolHandler } from "./toolRegistry";
 import {
     listDir,
@@ -37,6 +38,7 @@ import {
     executeShell,
     formatShellResult,
 } from "../../services/workspace/shell";
+import { registerCancellable, unregisterCancellable } from "./cancelRegistry";
 import { applyUnifiedDiff } from "../../services/workspace/patch";
 import { previewLineEdit, LineEdit } from "../../services/workspace/lineEdit";
 import { gotoLocation, getCursor } from "../../services/workspace/editorOps";
@@ -58,10 +60,16 @@ import {
 import { SUBAGENTS } from "./subagentDefs";
 import { fetchUrl, webSearch, scrapePage } from "../../services/workspace/web";
 import type { MemoryStore } from "../../services/memory/memoryStore";
+import type { SemanticSearcher } from "../../services/index/searcher";
 
 let _memoryStore: MemoryStore | undefined;
 export function setMemoryStore(store: MemoryStore): void {
     _memoryStore = store;
+}
+
+let _searcher: SemanticSearcher | undefined;
+export function setSemanticSearcher(s: SemanticSearcher): void {
+    _searcher = s;
 }
 
 export interface AgentTask {
@@ -82,6 +90,41 @@ interface TasksStore {
 let tasksStore: TasksStore | undefined;
 const TASKS_KEY = "onlysq.agentTasks.v1";
 const COUNTER_KEY = "onlysq.agentTasks.counter";
+const TASKS_FILE = ".onlysq/tasks.json";
+
+interface TasksFile {
+    counter: number;
+    tasks: AgentTask[];
+}
+
+async function loadTasksFromFile(): Promise<TasksFile | null> {
+    try {
+        const fs = await import("../../services/workspace/fs");
+        if (!(await fs.exists(TASKS_FILE))) return null;
+        const raw = await fs.readText(TASKS_FILE);
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== "object") return null;
+        const tasks = Array.isArray(parsed.tasks) ? parsed.tasks : [];
+        const counter = typeof parsed.counter === "number" ? parsed.counter : 0;
+        return { counter, tasks };
+    } catch (e) {
+        Logger.error("[tasks] failed to load tasks.json", e);
+        return null;
+    }
+}
+
+async function saveTasksToFile(): Promise<void> {
+    try {
+        const fs = await import("../../services/workspace/fs");
+        const body: TasksFile = {
+            counter: taskCounter,
+            tasks: agentTasks.map((t) => ({ ...t })),
+        };
+        await fs.writeText(TASKS_FILE, JSON.stringify(body, null, 2));
+    } catch (e) {
+        Logger.error("[tasks] failed to write tasks.json", e);
+    }
+}
 
 export function initAgentTasksStore(store: TasksStore): void {
     tasksStore = store;
@@ -108,14 +151,37 @@ export function initAgentTasksStore(store: TasksStore): void {
     } catch {
         /* ignore corrupted state */
     }
+
+    // File takes precedence if it exists
+    void loadTasksFromFile().then((file) => {
+        if (!file) return;
+        agentTasks.length = 0;
+        for (const t of file.tasks) {
+            if (t && typeof t.id === "string" && typeof t.text === "string") {
+                agentTasks.push({
+                    id: t.id,
+                    text: t.text,
+                    status: (t.status === "todo" || t.status === "in_progress" || t.status === "done") ? t.status : "todo",
+                });
+            }
+        }
+        taskCounter = Math.max(file.counter, ...agentTasks.map((t) => {
+            const m = /^task-(\d+)$/.exec(t.id);
+            return m ? Number(m[1]) : 0;
+        }), 0);
+        Logger.log(`[tasks] loaded ${agentTasks.length} task(s) from ${TASKS_FILE}`);
+        emitTasksChange();
+    });
 }
 
 function persistTasks(): void {
-    if (!tasksStore) return;
-    try {
-        void tasksStore.update(TASKS_KEY, agentTasks.map((t) => ({ ...t })));
-        void tasksStore.update(COUNTER_KEY, taskCounter);
-    } catch { /* ignore */ }
+    if (tasksStore) {
+        try {
+            void tasksStore.update(TASKS_KEY, agentTasks.map((t) => ({ ...t })));
+            void tasksStore.update(COUNTER_KEY, taskCounter);
+        } catch { /* ignore */ }
+    }
+    void saveTasksToFile();
 }
 
 function emitTasksChange(): void {
@@ -390,6 +456,51 @@ export const builtinTools: ToolHandler[] = [
             (await searchText(a.pattern, a.glob ?? "**/*", a.limit ?? 50)).join(
                 "\n"
             ) || "(no matches)",
+    },
+
+    {
+        def: {
+            type: "function",
+            function: {
+                name: "semantic_search",
+                description:
+                    "Semantic search across the workspace by meaning, not literal text. Returns top-K code chunks ranked by cosine similarity to your query embedding. Use for questions like 'where is auth state managed', 'find error handling for API calls', 'similar logic to X'. Requires a built index (run command OnlySq: Reindex Workspace first, or it returns an empty result). Much better than regex `search` when you don't know exact keywords.",
+                parameters: obj(
+                    {
+                        query: str("Natural-language query (English or Russian)"),
+                        topK: num("Number of results (default 8, max 50)"),
+                        path_filter: str("Optional substring filter for file paths (e.g. 'src/auth')"),
+                    },
+                    ["query"]
+                ),
+            },
+        },
+        run: async (a: any) => {
+            if (!_searcher) return "Error: semantic search not available (no searcher registered).";
+            const q = String(a.query || "").trim();
+            if (!q) return "Error: query is required.";
+            try {
+                const res = await _searcher.search(q, {
+                    topK: a.topK ? Number(a.topK) : undefined,
+                    pathFilter: typeof a.path_filter === "string" ? a.path_filter : undefined,
+                });
+                if (!res.indexStats) {
+                    return "No index found. Run 'OnlySq: Reindex Workspace' command first to enable semantic search.";
+                }
+                if (!res.hits.length) {
+                    return `No semantic matches for "${q.slice(0, 80)}" (index: ${res.indexStats.files} files, ${res.indexStats.chunks} chunks).`;
+                }
+                const lines = [`Top ${res.hits.length} of ${res.indexStats.chunks} chunks (model: ${res.indexStats.model}):`];
+                res.hits.forEach((h, i) => {
+                    lines.push(
+                        `${i + 1}. ${h.path}:${h.startLine}-${h.endLine}  score=${h.score.toFixed(3)}\n   ${h.snippet}`
+                    );
+                });
+                return lines.join("\n");
+            } catch (e: any) {
+                return `Error: ${e?.message ?? e}`;
+            }
+        },
     },
 
     {
@@ -1020,7 +1131,7 @@ export const builtinTools: ToolHandler[] = [
                 ),
             },
         },
-        run: async (a: any) => {
+        run: async (a: any, ctx: any) => {
             if (hasPendingEdits()) {
                 await waitForPendingEdits();
             }
@@ -1030,11 +1141,18 @@ export const builtinTools: ToolHandler[] = [
                 Math.max(1000, Number(a.timeout_ms) || 30_000),
                 120_000
             );
-            const r = await executeShell(String(a.command), {
-                cwd: a.cwd,
-                timeoutMs: timeout,
-            });
-            return formatShellResult(r);
+            const aborter = new AbortController();
+            if (ctx?.callId) registerCancellable(ctx.callId, () => aborter.abort(), "run_command");
+            try {
+                const r = await executeShell(String(a.command), {
+                    cwd: a.cwd,
+                    timeoutMs: timeout,
+                    abortSignal: aborter.signal,
+                });
+                return formatShellResult(r);
+            } finally {
+                if (ctx?.callId) unregisterCancellable(ctx.callId);
+            }
         },
     },
 
@@ -1104,7 +1222,7 @@ export const builtinTools: ToolHandler[] = [
                 ),
             },
         },
-        run: async (a: any) => {
+        run: async (a: any, ctx: any) => {
             const action = String(a.action || "");
             try {
                 if (action === "open") {
@@ -1136,7 +1254,14 @@ export const builtinTools: ToolHandler[] = [
                     if (!a.id) return "Error: id is required for read";
                     const waitMs = a.wait_ms != null ? Number(a.wait_ms) : 1000;
                     const clear = a.clear !== false;
-                    const r = await readFromSession(String(a.id), { waitMs, clear });
+                    const aborter = new AbortController();
+                    if (ctx?.callId) registerCancellable(ctx.callId, () => aborter.abort(), "terminal-read");
+                    let r;
+                    try {
+                        r = await readFromSession(String(a.id), { waitMs, clear, abortSignal: aborter.signal });
+                    } finally {
+                        if (ctx?.callId) unregisterCancellable(ctx.callId);
+                    }
                     const head = `Session ${a.id}${r.closed ? ` (closed, exit ${r.exitCode})` : ""} \u2014 ${r.output.length} bytes\n---`;
                     let body = r.output.length ? `${head}\n${r.output}` : `${head}\n(no new output)`;
                     if (r.userInputSinceLastRead) {

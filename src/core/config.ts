@@ -23,6 +23,7 @@ export const AI = {
     apiBase: "https://api.onlysq.ru/ai/openai",
     modelsPath: "/models",
     chatPath: "/chat/completions",
+    embeddingsPath: "/embeddings",
 } as const;
 
 export const STORAGE_KEYS = {
@@ -43,6 +44,7 @@ export const TOOL_DEFAULTS: Record<string, ToolPolicy> = {
     pause_agent: "always", ask_user: "always", read_file: "always",
     list_dir: "always", list_tree: "always", search: "always",
     find_files: "always", file_info: "always", find_in_file: "always",
+    semantic_search: "always",
     open_file: "always", goto_position: "always", get_cursor: "always",
     get_selection: "always", list_open_files: "always", get_diagnostics: "always",
     list_tasks: "always", git_status: "always", git_diff: "always",

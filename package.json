@@ -2,7 +2,7 @@
     "name": "onlysq-cli",
     "displayName": "OnlySq CLI",
     "description": "AI coding assistant by OnlySq — inline completions, chat, and agent mode with native diff previews",
-    "version": "0.2.235",
+    "version": "0.2.236",
     "publisher": "subashev",
     "repository": {
         "type": "git",
@@ -114,6 +114,16 @@
             {
                 "command": "onlysq.mcp.status",
                 "title": "MCP — Status",
+                "category": "OnlySq"
+            },
+            {
+                "command": "onlysq.reindex",
+                "title": "Reindex Workspace (semantic search)",
+                "category": "OnlySq"
+            },
+            {
+                "command": "onlysq.dropIndex",
+                "title": "Drop Semantic Index",
                 "category": "OnlySq"
             }
         ],

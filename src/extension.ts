@@ -8,8 +8,11 @@ import { AuthService } from "./services/auth/authService";
 import { OpenAIClient } from "./services/llm/openaiClient";
 import { ModelsService } from "./services/llm/modelsService";
 import { ToolRegistry } from "./features/agent/toolRegistry";
-import { builtinTools, setMemoryStore, initAgentTasksStore } from "./features/agent/tools";
+import { builtinTools, setMemoryStore, setSemanticSearcher, initAgentTasksStore } from "./features/agent/tools";
 import { MemoryStore } from "./services/memory/memoryStore";
+import { EmbeddingsClient } from "./services/llm/embeddingsClient";
+import { WorkspaceIndexer } from "./services/index/indexer";
+import { SemanticSearcher } from "./services/index/searcher";
 import { OnlySqInlineProvider } from "./features/completion/provider";
 import { ChatView } from "./ui/chatView";
 import { StatusBar } from "./ui/statusBar";
@@ -42,6 +45,18 @@ export async function activate(ctx: vscode.ExtensionContext) {
     const mcp = new McpManager(registry);
     ctx.subscriptions.push({ dispose: () => { void mcp.dispose(); } });
     void mcp.start().catch((e) => Logger.error("[mcp] start failed", e));
+
+    const embeddings = new EmbeddingsClient(auth);
+    const indexer = new WorkspaceIndexer(embeddings);
+    const searcher = new SemanticSearcher(indexer, embeddings);
+    setSemanticSearcher(searcher);
+    let indexingInFlight: AbortController | undefined;
+
+    const indexWatcher = vscode.workspace.createFileSystemWatcher("**/.onlysq/index.json");
+    indexWatcher.onDidChange(() => { void searcher.invalidate(); });
+    indexWatcher.onDidCreate(() => { void searcher.invalidate(); });
+    indexWatcher.onDidDelete(() => { void searcher.invalidate(); });
+    ctx.subscriptions.push(indexWatcher);
 
     // Hot reload on config change
     const mcpWatcher = vscode.workspace.createFileSystemWatcher("**/.onlysq/mcp.json");
@@ -250,6 +265,81 @@ export async function activate(ctx: vscode.ExtensionContext) {
         Logger.log("[mcp] status:\n" + lines.join("\n"));
         Logger.show();
         vscode.window.showInformationMessage(`MCP: ${lines.length} server(s). See log for details.`);
+    });
+
+    cmd("onlysq.reindex", async () => {
+        if (indexingInFlight) {
+            const pick = await vscode.window.showWarningMessage(
+                "Indexing already in progress. Cancel it?",
+                { modal: false },
+                "Cancel current",
+                "Keep running"
+            );
+            if (pick === "Cancel current") indexingInFlight.abort();
+            return;
+        }
+        if (!(await auth.isSignedIn())) {
+            vscode.window.showWarningMessage("OnlySq: sign in first to index workspace.");
+            return;
+        }
+        const ac = new AbortController();
+        indexingInFlight = ac;
+        await vscode.window.withProgress(
+            {
+                location: vscode.ProgressLocation.Notification,
+                title: "OnlySq: indexing workspace",
+                cancellable: true,
+            },
+            async (progress, token) => {
+                token.onCancellationRequested(() => ac.abort());
+                let lastPct = -1;
+                try {
+                    const result = await indexer.indexWorkspace({
+                        signal: ac.signal,
+                        onProgress: (p) => {
+                            const total = p.filesTotal || 1;
+                            const pct = Math.round((p.filesProcessed / total) * 100);
+                            if (pct !== lastPct) {
+                                lastPct = pct;
+                                progress.report({
+                                    message: `${p.phase} \u2014 ${p.filesProcessed}/${total} files, ${p.chunksEmbedded} chunks embedded` + (p.currentFile ? ` \u2014 ${p.currentFile}` : ""),
+                                    increment: undefined,
+                                });
+                            }
+                        },
+                    });
+                    await searcher.invalidate();
+                    const totalChunks = Object.values(result.files).reduce((a, f) => a + f.chunks.length, 0);
+                    vscode.window.showInformationMessage(`OnlySq: indexed ${Object.keys(result.files).length} files, ${totalChunks} chunks.`);
+                } catch (e: any) {
+                    if (e?.message?.includes("aborted")) {
+                        vscode.window.showInformationMessage("OnlySq: indexing cancelled.");
+                    } else {
+                        Logger.error("[index] failed", e);
+                        vscode.window.showErrorMessage(`OnlySq: indexing failed: ${e?.message ?? e}`);
+                    }
+                } finally {
+                    indexingInFlight = undefined;
+                }
+            }
+        );
+    });
+
+    cmd("onlysq.dropIndex", async () => {
+        const pick = await vscode.window.showWarningMessage(
+            "Delete the semantic search index?",
+            { modal: true },
+            "Delete",
+            "Cancel"
+        );
+        if (pick !== "Delete") return;
+        try {
+            await indexer.dropIndex();
+            await searcher.invalidate();
+            vscode.window.showInformationMessage("OnlySq: index deleted.");
+        } catch (e: any) {
+            vscode.window.showErrorMessage(`OnlySq: drop failed: ${e?.message ?? e}`);
+        }
     });
 
     if (await auth.isSignedIn()) {

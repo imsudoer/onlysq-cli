@@ -8,6 +8,7 @@ export interface ShellResult {
     code: number | null;
     signal: string | null;
     timedOut: boolean;
+    cancelled: boolean;
     stdout: string;
     stderr: string;
 }
@@ -16,6 +17,7 @@ export interface ShellOptions {
     cwd?: string;
     timeoutMs?: number;
     maxBytes?: number;
+    abortSignal?: AbortSignal;
 }
 
 const DEFAULT_TIMEOUT = 30_000;
@@ -36,9 +38,22 @@ export function executeShell(
         let stdout = "";
         let stderr = "";
         let timedOut = false;
+        let cancelled = false;
         let killed = false;
 
         const child = cp.spawn(exe, args, { cwd, env: process.env });
+
+        const cancelHandler = () => {
+            if (killed) return;
+            cancelled = true;
+            killed = true;
+            try { child.kill("SIGTERM"); } catch { /* */ }
+            setTimeout(() => { try { child.kill("SIGKILL"); } catch { /* */ } }, 1500);
+        };
+        if (opts.abortSignal) {
+            if (opts.abortSignal.aborted) cancelHandler();
+            else opts.abortSignal.addEventListener("abort", cancelHandler, { once: true });
+        }
 
         const cap = (chunk: Buffer, into: "out" | "err") => {
             const text = chunk.toString("utf8");
@@ -77,24 +92,28 @@ export function executeShell(
 
         child.on("close", (code, signal) => {
             clearTimeout(timer);
+            if (opts.abortSignal) opts.abortSignal.removeEventListener("abort", cancelHandler);
             resolveP({
                 command,
                 cwd,
                 code,
                 signal,
                 timedOut,
+                cancelled,
                 stdout: stdout.trimEnd(),
                 stderr: stderr.trimEnd(),
             });
         });
         child.on("error", (e) => {
             clearTimeout(timer);
+            if (opts.abortSignal) opts.abortSignal.removeEventListener("abort", cancelHandler);
             resolveP({
                 command,
                 cwd,
                 code: null,
                 signal: null,
-                timedOut: killed,
+                timedOut: killed && !cancelled,
+                cancelled,
                 stdout,
                 stderr: `${stderr}\nspawn error: ${e.message}`.trim(),
             });
@@ -138,7 +157,8 @@ export function formatShellResult(r: ShellResult): string {
     const lines: string[] = [];
     lines.push(`Command: ${r.command}`);
     lines.push(`Cwd: ${r.cwd}`);
-    if (r.timedOut) lines.push("Result: TIMED OUT");
+    if (r.cancelled) lines.push("Result: CANCELLED by user");
+    else if (r.timedOut) lines.push("Result: TIMED OUT");
     else
         lines.push(`Exit: ${r.code}${r.signal ? ` (signal ${r.signal})` : ""}`);
     if (r.stdout) {

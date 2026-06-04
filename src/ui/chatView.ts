@@ -13,6 +13,7 @@ import {
     onEditResultEvent,
 } from "../features/agent/tools";
 import { runAgent } from "../features/agent/loop";
+import { cancelTool } from "../features/agent/cancelRegistry";
 import { AuthService, AuthState } from "../services/auth/authService";
 import { ModelsService } from "../services/llm/modelsService";
 import { buildHtml, nonce } from "./webview/shared";
@@ -446,6 +447,13 @@ export class ChatView implements vscode.WebviewViewProvider {
                 for (const [, r] of this.askResolvers) r("(cancelled by user)");
                 this.askResolvers.clear();
                 this.aborter?.abort();
+                return;
+
+            case "cancelTool":
+                if (typeof m.id === "string") {
+                    const ok = cancelTool(m.id);
+                    Logger.log(`[chat] cancelTool ${m.id} \u2192 ${ok}`);
+                }
                 return;
 
             case "answerUser":

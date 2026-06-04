@@ -269,6 +269,56 @@
     // Extract <thinking> blocks for reasoning display
     var thinkingRe = /<thinking>([\s\S]*?)<\/thinking>/gi;
 
+    var MAX_FRESH_CHARS = 50;
+    function wrapFreshTokens(root, freshLen) {
+        if (!root || freshLen <= 0) return;
+        var cap = Math.min(freshLen, MAX_FRESH_CHARS);
+        var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+            acceptNode: function(node) {
+                var p = node.parentNode;
+                while (p && p !== root) {
+                    if (p.tagName === "PRE" || p.tagName === "CODE" || p.classList && p.classList.contains("reasoning-block")) {
+                        return NodeFilter.FILTER_REJECT;
+                    }
+                    p = p.parentNode;
+                }
+                return node.nodeValue && node.nodeValue.length > 0 ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
+            }
+        });
+        var textNodes = [];
+        var n;
+        while ((n = walker.nextNode())) textNodes.push(n);
+        var remaining = cap;
+        var globalIndex = 0;
+        var totalToAnimate = cap;
+        for (var i = textNodes.length - 1; i >= 0 && remaining > 0; i--) {
+            var tn = textNodes[i];
+            var len = tn.nodeValue.length;
+            var take = Math.min(remaining, len);
+            var head = tn.nodeValue.slice(0, len - take);
+            var tail = tn.nodeValue.slice(len - take);
+            var frag = document.createDocumentFragment();
+            if (head) frag.appendChild(document.createTextNode(head));
+            for (var ci = 0; ci < tail.length; ci++) {
+                var ch = tail[ci];
+                if (ch === "\n" || ch === "\r" || ch === "\t") {
+                    frag.appendChild(document.createTextNode(ch));
+                    continue;
+                }
+                var span = document.createElement("span");
+                span.className = "tk-fresh";
+                span.textContent = ch;
+                var pos = totalToAnimate - remaining + ci;
+                var delay = Math.min(pos * 8, 220);
+                span.style.animationDelay = delay + "ms";
+                frag.appendChild(span);
+            }
+            tn.parentNode.replaceChild(frag, tn);
+            remaining -= take;
+            globalIndex += take;
+        }
+    }
+
     function renderMarkdown(text) {
         if (!text) return "";
         // Render thinking blocks first
@@ -777,7 +827,7 @@
             '<div class="small muted" style="margin-bottom:8px">Per-tool: <b>always</b> (auto-approve) / <b>ask</b> (prompt) / <b>never</b> (deny) / <b>disabled</b> (hide from agent)</div>';
         var policy = values["agent.toolPolicy"] || {};
         var toolGroups = {
-            "Read-only": ["read_file","list_dir","list_tree","search","find_files","file_info","find_in_file",
+            "Read-only": ["read_file","list_dir","list_tree","search","semantic_search","find_files","file_info","find_in_file",
                 "open_file","goto_position","get_cursor","get_selection","list_open_files","get_diagnostics",
                 "list_tasks","git_status","git_diff","workspace_info","system_info","read_project_context","get_my_config"],
             "File edits": ["propose_edit","apply_at_line","replace_in_file","patch_file","delete_file","rename_file","update_project_context"],
@@ -999,6 +1049,15 @@
     }
 
     function addHistoricalTool(t, prepend) {
+        var isErr = typeof t.result === "string" && /^Error:/i.test(t.result);
+        if (TASK_TOOLS[t.name] && !isErr && t.name !== "list_agent_tasks") {
+            var widget = renderTaskWidget(t.name, t.args || {}, t.result || "");
+            if (widget) {
+                if (prepend) logBody.insertBefore(widget, logBody.firstChild);
+                else logBody.appendChild(widget);
+                return;
+            }
+        }
         const isFile = FILE_TOOLS.has(t.name);
         const block = document.createElement("div");
         block.className = "tool-block" + (isFile ? " file" : "");
@@ -1276,6 +1335,7 @@
         return verb + "…";
     }
 
+    var CANCELLABLE_TOOLS = { run_command: true, run_command_interactive: true, terminal: true };
     function addToolBlock(id, name, args) {
         const isFile = FILE_TOOLS.has(name);
         const block = el(
@@ -1287,6 +1347,10 @@
         const summary = summarizeArgs(name, args);
 
         const head = el("div", "tool-head", block);
+        var cancelBtn = "";
+        if (CANCELLABLE_TOOLS[name]) {
+            cancelBtn = '<button class="tcancel" title="Cancel (kill process)" type="button"><svg viewBox="0 0 24 24" width="11" height="11"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>';
+        }
         head.innerHTML =
             '<span class="tspinner"></span>' +
             '<span class="tname">' +
@@ -1297,6 +1361,7 @@
             '">' +
             escapeHtml(summary) +
             "</span>" +
+            cancelBtn +
             '<span class="tarrow">▶</span>';
 
         if (args && typeof args.reason === "string" && args.reason.trim()) {
@@ -1312,7 +1377,20 @@
             highlightCode(JSON.stringify(args, null, 2)) +
             "</div>";
 
-        head.addEventListener("click", () => block.classList.toggle("open"));
+        head.addEventListener("click", (e) => {
+            if (e.target && e.target.closest && e.target.closest(".tcancel")) return;
+            block.classList.toggle("open");
+        });
+        var cancelEl = head.querySelector(".tcancel");
+        if (cancelEl) {
+            cancelEl.addEventListener("click", function(e) {
+                e.stopPropagation();
+                cancelEl.disabled = true;
+                cancelEl.classList.add("tcancel-pressed");
+                cancelEl.title = "Cancelling\u2026";
+                vscode.postMessage({ type: "cancelTool", id: id });
+            });
+        }
 
         toolBlocks.set(id, block);
         if (args && typeof args === "object") toolArgs.set(id, args);
@@ -1406,6 +1484,8 @@
                 ? '<span class="txmark">\u2717</span>'
                 : '<span class="tcheck">\u2713</span>';
         }
+        var cancelEl2 = block.querySelector(".tcancel");
+        if (cancelEl2) cancelEl2.remove();
         if (isError) block.classList.add("error");
 
         var body = block.querySelector(".tool-body");
@@ -2694,14 +2774,11 @@
             case "token":
                 clearStatusPill();
                 if (!currentBody) startAssistantBody();
+                var addedLen = m.text ? m.text.length : 0;
                 currentAcc += m.text;
-                // Mark existing children so we can animate only new ones
-                var prevCount = currentBody.childNodes.length;
                 currentBody.innerHTML = renderMarkdown(currentAcc);
-                // Animate only newly added top-level children
-                var kids = currentBody.childNodes;
-                for (var ci = prevCount; ci < kids.length; ci++) {
-                    if (kids[ci].nodeType === 1) kids[ci].style.animation = "chunkIn 0.18s ease-out";
+                if (addedLen > 0) {
+                    wrapFreshTokens(currentBody, addedLen);
                 }
                 var parentMsg2 = currentBody.closest(".msg");
                 if (parentMsg2) {

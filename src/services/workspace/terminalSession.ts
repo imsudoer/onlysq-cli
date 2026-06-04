@@ -27,6 +27,7 @@ export interface OpenSessionOpts {
 export interface ReadSessionOpts {
     waitMs?: number;
     clear?: boolean;
+    abortSignal?: AbortSignal;
 }
 
 export interface SessionInfo {
@@ -236,7 +237,17 @@ export async function readFromSession(
     const waitMs = opts.waitMs != null ? Math.min(Math.max(0, opts.waitMs), 30000) : 1000;
     const clear = opts.clear !== false;
     if (waitMs > 0 && !s.closed) {
-        await new Promise((r) => setTimeout(r, waitMs));
+        await new Promise<void>((r) => {
+            const t = setTimeout(() => {
+                if (opts.abortSignal) opts.abortSignal.removeEventListener("abort", onAbort);
+                r();
+            }, waitMs);
+            const onAbort = () => { clearTimeout(t); r(); };
+            if (opts.abortSignal) {
+                if (opts.abortSignal.aborted) { clearTimeout(t); r(); }
+                else opts.abortSignal.addEventListener("abort", onAbort, { once: true });
+            }
+        });
     }
     const output = s.buffer;
     const userInput = s.userInputBuffer;
