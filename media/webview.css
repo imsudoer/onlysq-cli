@@ -1062,14 +1062,17 @@ button.icon-btn.on {
 }
 .modal {
     background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 6px;
+    border: 1px solid rgba(253, 107, 3, 0.35);
+    border-radius: 8px;
     width: 90%;
     max-width: 380px;
     max-height: 70vh;
     display: flex;
     flex-direction: column;
-    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(253, 107, 3, 0.06), 0 0 40px rgba(253, 107, 3, 0.06);
+}
+.modal-head {
+    background: linear-gradient(180deg, rgba(253, 107, 3, 0.08) 0%, transparent 100%);
 }
 .modal-head {
     padding: 8px 10px;
@@ -1321,9 +1324,9 @@ button.icon-btn.on {
     width: calc(100% - 12px);
     max-height: 60%;
     background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+    border: 1px solid rgba(253, 107, 3, 0.30);
+    border-radius: 8px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(253, 107, 3, 0.04);
     z-index: 50;
     display: none;
     flex-direction: column;
@@ -2518,11 +2521,11 @@ button.icon-btn.on {
 .confirm-modal {
     background: var(--bg);
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: 8px;
     padding: 16px 18px;
     max-width: 360px;
     width: 90%;
-    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.04);
     animation: modalIn 0.15s ease-out;
 }
 @keyframes modalIn {
@@ -2611,9 +2614,9 @@ button.icon-btn.on {
     max-height: 200px;
     overflow-y: auto;
     background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 6px 6px 0 0;
-    box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.25);
+    border: 1px solid rgba(253, 107, 3, 0.30);
+    border-radius: 8px 8px 0 0;
+    box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(253, 107, 3, 0.05);
     z-index: 50;
     display: none;
 }
@@ -2723,12 +2726,12 @@ button.icon-btn.on {
     justify-content: space-between;
     background: var(--accent-soft);
     border: 1px solid var(--accent-line);
-    border-radius: 4px;
+    border-radius: 6px;
     padding: 6px 10px;
     margin: 4px 6px 8px 6px;
     font-size: 12px;
     backdrop-filter: blur(6px);
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(253, 107, 3, 0.06), 0 0 24px rgba(253, 107, 3, 0.10);
     animation: chunkIn 0.2s ease-out both;
 }
 .multi-diff-bar .mdb-label {
@@ -2779,9 +2782,9 @@ button.icon-btn.on {
     top: calc(100% + 2px);
     right: 0;
     background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    border: 1px solid rgba(253, 107, 3, 0.25);
+    border-radius: 6px;
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(253, 107, 3, 0.04);
     z-index: 60;
     min-width: 160px;
     display: none;
