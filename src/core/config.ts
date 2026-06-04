@@ -96,7 +96,7 @@ export function settings(): Settings {
     return {
         chatModel: c.get("chatModel", "gpt-4o-mini"),
         completionModel: c.get("completionModel", "gpt-4o-mini"),
-        embeddingModel: c.get("embeddingModel", "gemini-embedding-001"),
+        embeddingModel: c.get("embeddingModel", "pplx-embed-v1-4b"),
         inlineEnabled: c.get("inlineCompletions.enabled", true),
         autoTrigger: c.get("inlineCompletions.autoTrigger", true),
         contextLinesBefore: c.get("inlineCompletions.linesBefore", 80),

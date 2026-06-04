@@ -7,11 +7,13 @@ import { EmbeddingsClient } from "../llm/embeddingsClient";
 const INDEX_PATH = ".onlysq/index.json";
 const INDEX_VERSION = 1;
 
-const DEFAULT_MODEL = "gemini-embedding-001";
+const DEFAULT_MODEL = "pplx-embed-v1-4b";
 const CHUNK_MAX_CHARS = 1500;
 const CHUNK_OVERLAP_CHARS = 200;
 const BATCH_SIZE = 64;
 const BATCH_CONCURRENCY = 3;
+const MAX_RETRIES = 3;
+const RETRY_BASE_MS = 2000;
 const MAX_FILE_BYTES = 500_000;
 const SEARCH_GLOB = "**/*";
 const EXCLUDE_GLOB =
@@ -243,7 +245,21 @@ export class WorkspaceIndexer {
         const runBatch = async (batch: typeof toEmbed) => {
             if (signal?.aborted) throw new Error("aborted");
             const inputs = batch.map((b) => b.text);
-            const resp = await this.embeddings.embed({ model, input: inputs }, signal);
+            let resp;
+            for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+                try {
+                    resp = await this.embeddings.embed({ model, input: inputs }, signal);
+                    break;
+                } catch (e: any) {
+                    const msg = String(e?.message ?? e);
+                    const retryable = /50[0-9]|429|rate|timeout|ECONNRESET|ETIMEDOUT|socket hang up/i.test(msg);
+                    if (!retryable || attempt === MAX_RETRIES - 1) throw e;
+                    const delay = RETRY_BASE_MS * Math.pow(2, attempt);
+                    Logger.log(`[index] batch failed (${msg.slice(0, 80)}), retry ${attempt + 1}/${MAX_RETRIES} in ${delay}ms`);
+                    await new Promise((r) => setTimeout(r, delay));
+                }
+            }
+            if (!resp) throw new Error("embed returned no response after retries");
             for (const item of resp.data) {
                 const target = batch[item.index];
                 if (!target) continue;
