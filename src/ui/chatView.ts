@@ -11,6 +11,7 @@ import { ChatStore, ChatSession } from "../services/chat/chatStore";
 import { systemBriefForLLM } from "../core/systemInfo";
 import { sanitizeHistoryForApi } from "../services/llm/historyUtils";
 import { settings, updateSetting, SAUTH } from "../core/config";
+import { MemoryStore } from "../services/memory/memoryStore";
 
 const HISTORY_WINDOW = 30;
 const HISTORY_PAGE = 30;
@@ -27,12 +28,19 @@ const CHAT_BODY = `
 </div>
 
 <div id="chatHeader" class="chat-header" style="display:none">
-  <button class="icon-btn" id="chatsBtn" title="Chats">≡</button>
+  <button class="icon-btn" id="chatsBtn" title="Chats"><svg viewBox="0 0 24 24"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg></button>
   <div class="chat-title-wrap">
     <span id="chatTitle" class="chat-title" title="Click to rename">New chat</span>
   </div>
-  <button class="icon-btn" id="newChat" title="New chat">+</button>
-  <button class="icon-btn" id="settingsBtn" title="Settings">⚙</button>
+  <button class="icon-btn" id="newChat" title="New chat"><svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
+  <div class="export-btn-wrap">
+    <button class="icon-btn" id="exportBtn" title="Export chat"><svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>
+    <div id="exportMenu" class="export-menu">
+      <button class="export-menu-item" data-format="markdown">Export as Markdown</button>
+      <button class="export-menu-item" data-format="json">Export as JSON</button>
+    </div>
+  </div>
+  <button class="icon-btn" id="settingsBtn" title="Settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09a1.65 1.65 0 00-1.08-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09a1.65 1.65 0 001.51-1.08 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001.08 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1.08z"/></svg></button>
 </div>
 
 <div id="chatsPanel" class="chats-panel" style="display:none">
@@ -46,7 +54,7 @@ const CHAT_BODY = `
 <div id="settingsPanel" class="settings-panel" style="display:none">
   <div class="settings-head">
     <span>Settings</span>
-    <button class="icon-btn" id="settingsClose" title="Close">×</button>
+    <button class="icon-btn" id="settingsClose" title="Close"><svg viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
   </div>
   <div id="settingsBody" class="settings-body"></div>
 </div>
@@ -59,20 +67,37 @@ const CHAT_BODY = `
 </main>
 
 <div id="composerWrap" class="composer-wrap" style="display:none">
+  <div id="contextPins" class="context-pins"></div>
+  <div id="mentionPopup" class="mention-popup"></div>
+  <div id="dropOverlay" class="drop-overlay"><div class="drop-overlay-inner">Drop files here</div></div>
+  <div id="attachedFiles" class="attached-files"></div>
   <div id="composer" class="composer">
     <div class="composer-resizer" id="composerResizer"></div>
-    <textarea id="inp" rows="1" placeholder="Ask anything, or describe a task…"></textarea>
+    <textarea id="inp" rows="1" placeholder="Ask anything, or @ to mention a file…"></textarea>
     <div class="composer-toolbar">
       <div class="toolbar-left">
-        <button class="icon-btn" id="agentToggle" title="Agent mode (file edits)">A</button>
-        <div class="model-pill" id="modelPill" title="Select model">
-          <span id="modelLabel">Loading…</span>
-          <span class="pcaret">▾</span>
+        <div class="mode-bar" id="modeBar">
+          <div class="mode-slider" id="modeSlider"></div>
+          <button class="mode-opt" data-mode="agent" title="Agent">
+            <svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+          </button>
+          <button class="mode-opt active" data-mode="chat" title="Chat">
+            <svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+          </button>
+          <button class="mode-opt" data-mode="plan" title="Plan">
+            <svg viewBox="0 0 24 24"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><line x1="9" y1="12" x2="15" y2="12"/><line x1="9" y1="16" x2="13" y2="16"/></svg>
+          </button>
+          <div class="mode-sep"></div>
+          <button class="mode-model" id="modelPill" title="Select model">
+            <span id="modelLabel">Loading…</span>
+            <span class="pcaret">▾</span>
+          </button>
         </div>
       </div>
       <div class="toolbar-right">
-        <button class="send-btn" id="sendBtn" title="Send (Enter)" disabled>↑</button>
-        <button class="stop-btn" id="stopBtn" title="Stop" style="display:none">■</button>
+        <button class="pause-btn" id="pauseBtn" title="Pause after current step" style="display:none"><svg viewBox="0 0 24 24"><line x1="10" y1="6" x2="10" y2="18"/><line x1="14" y1="6" x2="14" y2="18"/></svg></button>
+        <button class="send-btn" id="sendBtn" title="Send (Enter)" disabled><svg viewBox="0 0 24 24"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg></button>
+        <button class="stop-btn" id="stopBtn" title="Stop" style="display:none"><svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1"/></svg></button>
       </div>
     </div>
   </div>
@@ -97,13 +122,19 @@ export class ChatView implements vscode.WebviewViewProvider {
     private windowStart = 0;
     private aborter?: AbortController;
     private subs: vscode.Disposable[] = [];
+    private isRunning = false;
+    private paused = false;
+    private pauseWaiter: (() => void) | null = null;
+    private askResolvers = new Map<string, (answer: string) => void>();
+    private liveMessages: import("../services/llm/types").ChatMessage[] = [];
 
     constructor(
         private ctx: vscode.ExtensionContext,
         private client: OpenAIClient,
         private registry: ToolRegistry,
         private auth: AuthService,
-        private modelsService: ModelsService
+        private modelsService: ModelsService,
+        private memory?: MemoryStore
     ) {
         this.chats = new ChatStore(ctx);
         this.activeChat = this.chats.active();
@@ -160,14 +191,9 @@ export class ChatView implements vscode.WebviewViewProvider {
                 "agent.parallelTools": c.get("agent.parallelTools", true),
                 "agent.toolCache": c.get("agent.toolCache", true),
                 "chat.persistHistory": c.get("chat.persistHistory", true),
-                "approval.write": c.get("approval.write", "ask"),
-                "approval.delete": c.get("approval.delete", "ask"),
-                "approval.rename": c.get("approval.rename", "ask"),
-                "approval.shell": c.get("approval.shell", "ask"),
-                "approval.vscodeCommand": c.get(
-                    "approval.vscodeCommand",
-                    "ask"
-                ),
+                "agent.customSystemPrompt": c.get("agent.customSystemPrompt", ""),
+                "agent.personalization": c.get("agent.personalization", false),
+                "agent.toolPolicy": settings().toolPolicy,
             },
         });
     }
@@ -295,10 +321,39 @@ export class ChatView implements vscode.WebviewViewProvider {
                     await this.pushAuth();
                     return;
                 }
-                return this.handleSend(m.text, m.mode);
+                // If agent is running, queue as live message instead of starting new run
+                if (this.isRunning && m.mode === "agent") {
+                    this.liveMessages.push({ role: "user", content: m.text });
+                    Logger.log(`[chat] queued live message during agent run: ${m.text.slice(0, 80)}`);
+                    return;
+                }
+                return this.handleSend(m.text, m.mode, m.images);
 
             case "cancel":
+                Logger.log("[chat] cancel requested");
+                this.resumeAgent();
+                for (const [, r] of this.askResolvers) r("(cancelled by user)");
+                this.askResolvers.clear();
                 this.aborter?.abort();
+                return;
+
+            case "answerUser":
+                if (typeof m.id === "string" && typeof m.answer === "string") {
+                    const r = this.askResolvers.get(m.id);
+                    if (r) {
+                        this.askResolvers.delete(m.id);
+                        r(m.answer);
+                    }
+                }
+                return;
+
+            case "togglePause":
+                if (this.paused) this.resumeAgent();
+                else this.setPaused(true, "Paused by user");
+                return;
+
+            case "resume":
+                this.resumeAgent();
                 return;
 
             case "newChat":
@@ -357,6 +412,10 @@ export class ChatView implements vscode.WebviewViewProvider {
             case "loadMore":
                 return this.loadMore();
             case "trimToWindow":
+                if (this.isRunning) {
+                    Logger.log("[chat] trimToWindow ignored while running");
+                    return;
+                }
                 return this.trimToWindow();
 
             case "selectModel":
@@ -448,6 +507,89 @@ export class ChatView implements vscode.WebviewViewProvider {
                     vscode.Uri.parse(SAUTH.dashboard)
                 );
                 return;
+
+            case "exportChat":
+                if (typeof m.format === "string") {
+                    await this.exportChat(m.format as "markdown" | "json");
+                }
+                return;
+
+            case "undoLastEdit":
+                if (typeof m.id === "string") {
+                    const { undoProposal } = await import(
+                        "../services/workspace/diffPreview"
+                    );
+                    const ok = await undoProposal(m.id);
+                    this.view?.webview.postMessage({
+                        type: "undoResult",
+                        id: m.id,
+                        success: ok,
+                    });
+                }
+                return;
+
+            case "applyAllEdits":
+                if (Array.isArray(m.ids)) {
+                    const { applyProposal, getProposalState } = await import(
+                        "../services/workspace/diffPreview"
+                    );
+                    for (const id of m.ids) {
+                        await applyProposal(id).catch(() => {});
+                        this.view?.webview.postMessage({
+                            type: "editResult",
+                            id,
+                            state: getProposalState(id) === "applied" ? "applied" : "error",
+                        });
+                    }
+                }
+                return;
+
+            case "rejectAllEdits":
+                if (Array.isArray(m.ids)) {
+                    const { rejectProposal } = await import(
+                        "../services/workspace/diffPreview"
+                    );
+                    for (const id of m.ids) {
+                        rejectProposal(id);
+                        this.view?.webview.postMessage({
+                            type: "editResult",
+                            id,
+                            state: "rejected",
+                        });
+                    }
+                }
+                return;
+
+            case "mentionSearch":
+                if (typeof m.query === "string") {
+                    const { findFiles } = await import(
+                        "../services/workspace/fs"
+                    );
+                    const q = m.query.replace(/[\\/:]/g, "").trim();
+                    const glob = q ? `**/*${q}*` : "**/*";
+                    const files = await findFiles(glob, 15);
+                    this.view?.webview.postMessage({
+                        type: "mentionResults",
+                        files,
+                    });
+                }
+                return;
+
+            case "readFileContent":
+                if (typeof m.path === "string") {
+                    try {
+                        const { readText } = await import(
+                            "../services/workspace/fs"
+                        );
+                        const text = await readText(m.path, 50_000);
+                        this.view?.webview.postMessage({
+                            type: "fileContent",
+                            path: m.path,
+                            content: text,
+                        });
+                    } catch {}
+                }
+                return;
         }
     }
 
@@ -462,36 +604,155 @@ export class ChatView implements vscode.WebviewViewProvider {
 
     private async handleSend(
         text: string,
-        mode: "chat" | "agent"
+        mode: "chat" | "agent" | "plan",
+        images?: string[]
     ): Promise<void> {
+        // Handle slash commands locally
+        const slashResult = await this.handleSlashCommand(text);
+        if (slashResult !== null) {
+            if (slashResult) this.post({ type: "token", text: slashResult });
+            this.post({ type: "done" });
+            return;
+        }
+
         await this.ensureActiveChat();
+
+        if (this.isRunning) {
+            this.aborter?.abort();
+        }
+
+        this.setPaused(false);
+        this.isRunning = true;
         this.aborter?.abort();
+
         const aborter = new AbortController();
         this.aborter = aborter;
 
+        // Build multimodal content if images present
+        let finalText: string = text;
+        const imageContent: Array<{type: "image_url"; image_url: {url: string}}> = [];
+        if (images?.length) {
+            for (const img of images) {
+                imageContent.push({ type: "image_url", image_url: { url: img } });
+            }
+        }
+
         try {
-            if (mode === "agent") await this.runAgentMode(text, aborter.signal);
-            else await this.runChatMode(text, aborter.signal);
+            if (mode === "agent" || mode === "plan") await this.runAgentMode(finalText, aborter.signal, mode === "plan", imageContent);
+            else await this.runChatMode(finalText, aborter.signal, imageContent);
         } catch (e: any) {
             Logger.error("[chat] send", e);
             this.post({ type: "error", message: String(e?.message ?? e) });
+        } finally {
+            if (this.aborter === aborter) {
+                this.isRunning = false;
+                this.setPaused(false);
+            }
         }
+    }
+
+    /** Returns null if not a slash command, otherwise the response text */
+    private async handleSlashCommand(text: string): Promise<string | null> {
+        const t = text.trim();
+        if (!t.startsWith("/")) return null;
+        const parts = t.split(/\s+/);
+        const cmd = parts[0].toLowerCase();
+        const arg = parts.slice(1).join(" ");
+
+        switch (cmd) {
+            case "/clear":
+                await this.newChat();
+                return "";
+            case "/model":
+                if (arg) {
+                    await updateSetting("chatModel", arg);
+                    this.pushModel();
+                    return `Model set to: ${arg}`;
+                }
+                return `Current model: ${settings().chatModel}`;
+            case "/export":
+                await this.exportChat(arg === "json" ? "json" : "markdown");
+                return "";
+            case "/memory":
+                if (!this.memory) return "Memory not available.";
+                if (arg.startsWith("set ")) {
+                    const m = arg.slice(4).match(/^(\S+)\s+(.+)$/s);
+                    if (m) { await this.memory.set(m[1], m[2]); return `Stored: ${m[1]}`; }
+                    return "Usage: /memory set <key> <value>";
+                }
+                if (arg.startsWith("get ")) {
+                    const v = this.memory.get(arg.slice(4).trim());
+                    return v ?? "Not found.";
+                }
+                if (arg.startsWith("delete ")) {
+                    const ok = await this.memory.delete(arg.slice(7).trim());
+                    return ok ? "Deleted." : "Not found.";
+                }
+                if (arg === "clear") {
+                    await this.memory.clear();
+                    return "All memories cleared.";
+                }
+                // list
+                const entries = this.memory.list();
+                if (!entries.length) return "No memories stored.";
+                return entries.map(e => `**${e.key}**: ${e.value}`).join("\n");
+            case "/agent":
+                return "Toggle agent mode with the \u26A1 button, or start a message normally.";
+            case "/help":
+                return [
+                    "**Slash commands:**",
+                    "`/clear` — new chat",
+                    "`/model [name]` — show/set model",
+                    "`/export [md|json]` — export chat",
+                    "`/memory` — list memories",
+                    "`/memory set <key> <value>` — store",
+                    "`/memory get <key>` — retrieve",
+                    "`/memory delete <key>` — remove",
+                    "`/memory clear` — wipe all",
+                    "`/help` — this list",
+                ].join("\n");
+            default:
+                return null; // Not a known command — send to LLM
+        }
+    }
+
+    /** Read .onlysq rules file if it exists */
+    private async readRulesFile(): Promise<string> {
+        try {
+            const folders = vscode.workspace.workspaceFolders;
+            if (!folders?.length) return "";
+            for (const name of [".onlysq", ".onlysq-rules", ".onlysq.md"]) {
+                const uri = vscode.Uri.joinPath(folders[0].uri, name);
+                try {
+                    const data = await vscode.workspace.fs.readFile(uri);
+                    const text = Buffer.from(data).toString("utf-8").trim();
+                    if (text) return `\n\n--- Project Rules (${name}) ---\n${text}`;
+                } catch { /* file doesn't exist */ }
+            }
+        } catch { /* */ }
+        return "";
     }
 
     private async runChatMode(
         text: string,
-        signal: AbortSignal
+        signal: AbortSignal,
+        imageContent: Array<{type: "image_url"; image_url: {url: string}}> = []
     ): Promise<void> {
         const ctx = await editorContextSnippet();
-        const userContent = ctx
+        const textContent = ctx
             ? `${text}\n\n---\n**Editor context:**\n${ctx}`
             : text;
+        const userContent: any = imageContent.length
+            ? [{ type: "text", text: textContent }, ...imageContent]
+            : textContent;
+        const rules = await this.readRulesFile();
+        const memCtx = this.memory?.toContext() ?? "";
         const systemPrompt = `You are OnlySq CLI, a coding assistant inside VS Code.
     - Answer in Markdown with fenced code blocks (\`\`\`lang).
     - Be concise. Prefer code over prose when code is the answer.
     
     --- System context ---
-    ${systemBriefForLLM()}`;
+    ${systemBriefForLLM()}${rules}${memCtx}`;
 
         const cleanHistory = sanitizeHistoryForApi(this.history);
         const messages: ChatMessage[] = [
@@ -520,15 +781,30 @@ export class ChatView implements vscode.WebviewViewProvider {
         this.updateHistoryAfterTurn();
         await this.persistActive();
         this.pushChatList();
+        if (this.activeChat && this.activeChat.title === "New chat") {
+            void this.generateAutoTitle(text).catch(() => {});
+        }
     }
 
     private async runAgentMode(
         text: string,
-        signal: AbortSignal
+        signal: AbortSignal,
+        planOnly = false,
+        imageContent: Array<{type: "image_url"; image_url: {url: string}}> = []
     ): Promise<void> {
         const ctx = await editorContextSnippet();
-        const goal = ctx ? `${text}\n\n---\n**Editor context:**\n${ctx}` : text;
+        const goalText = ctx ? `${text}\n\n---\n**Editor context:**\n${ctx}` : text;
+        // If images, note them in text (vision handled at API level via history)
+        const goal = imageContent.length
+            ? goalText + `\n\n[${imageContent.length} image(s) attached — refer to the conversation history to see them]`
+            : goalText;
+        const rules = await this.readRulesFile();
+        const memCtx = this.memory?.toContext() ?? "";
+        const planCtx = planOnly
+            ? "\n\n--- PLAN MODE ---\nYou are in PLAN mode. You can ONLY read and analyze — do NOT modify any files, run commands, or make changes. Output a structured plan with numbered steps. Use only read-only tools."
+            : "";
         const cleanHistory = sanitizeHistoryForApi(this.history);
+        let stepNum = 0;
         const updated = await runAgent(
             this.client,
             this.registry,
@@ -546,6 +822,14 @@ export class ChatView implements vscode.WebviewViewProvider {
                             args: e.args,
                         });
                         break;
+                    case "tool-call-partial":
+                        this.post({
+                            type: "tool-call-partial",
+                            id: e.id,
+                            name: e.name,
+                            argsPartial: e.argsPartial,
+                        });
+                        break;
                     case "tool-result":
                         this.post({
                             type: "tool-result",
@@ -553,6 +837,21 @@ export class ChatView implements vscode.WebviewViewProvider {
                             name: e.name,
                             result: e.result,
                         });
+                        break;
+                    case "ask-user":
+                        this.post({
+                            type: "ask-user",
+                            id: e.id,
+                            question: e.question,
+                            options: e.options,
+                            multiSelect: e.multiSelect,
+                        });
+                        break;
+                    case "pause":
+                        this.setPaused(true, e.reason);
+                        break;
+                    case "step":
+                        this.post({ type: "step", step: e.step, maxSteps: e.maxSteps });
                         break;
                     case "done":
                         this.post({ type: "done", reason: e.reason });
@@ -563,12 +862,27 @@ export class ChatView implements vscode.WebviewViewProvider {
                 }
             },
             signal,
-            cleanHistory
+            cleanHistory,
+            {
+                shouldPause: () => this.paused,
+                waitIfPaused: (reason?: string) => this.waitIfPaused(reason),
+                askUser: (callId: string) => this.askUser(callId),
+                getLiveMessages: () => {
+                    const msgs = this.liveMessages.splice(0);
+                    return msgs;
+                },
+            },
+            rules + memCtx + planCtx,
         );
+        this.liveMessages = [];
         if (this.activeChat) this.activeChat.messages = updated;
         this.updateHistoryAfterTurn();
         await this.persistActive();
         this.pushChatList();
+        // Auto-title via LLM if first message
+        if (this.activeChat && this.activeChat.title === "New chat") {
+            void this.generateAutoTitle(text).catch(() => {});
+        }
     }
 
     private updateHistoryAfterTurn(): void {
@@ -611,8 +925,117 @@ export class ChatView implements vscode.WebviewViewProvider {
         this.notifyCanLoadMore();
     }
 
+    private setPaused(value: boolean, reason?: string): void {
+        this.paused = value;
+        this.view?.webview.postMessage({
+            type: "pauseState",
+            paused: value,
+            reason: reason ?? null,
+        });
+    }
+
+    private async waitIfPaused(reason?: string): Promise<void> {
+        if (!this.paused) return;
+        this.setPaused(true, reason);
+        await new Promise<void>((resolve) => {
+            this.pauseWaiter = resolve;
+        });
+        this.pauseWaiter = null;
+    }
+
+    private resumeAgent(): void {
+        this.setPaused(false);
+        const r = this.pauseWaiter;
+        this.pauseWaiter = null;
+        r?.();
+    }
+
+    private askUser(callId: string): Promise<string> {
+        return new Promise((resolve) => {
+            this.askResolvers.set(callId, resolve);
+        });
+    }
+
     private post(msg: any): void {
         this.view?.webview.postMessage(msg);
+    }
+
+    private async generateAutoTitle(firstMessage: string): Promise<void> {
+        if (!this.activeChat) return;
+        try {
+            const messages: ChatMessage[] = [
+                { role: "system", content: "Generate a short chat title (3-6 words, no quotes) for this conversation. Reply with ONLY the title." },
+                { role: "user", content: firstMessage.slice(0, 500) },
+            ];
+            let title = "";
+            for await (const d of this.client.stream({
+                model: settings().chatModel,
+                temperature: 0.3,
+                max_tokens: 20,
+                messages,
+            })) {
+                if (d.content) title += d.content;
+            }
+            title = title.replace(/["']/g, "").trim();
+            if (title && title.length > 2 && title.length < 60 && this.activeChat) {
+                this.activeChat.title = title;
+                await this.chats.rename(this.activeChat.id, title);
+                this.pushChatList();
+            }
+        } catch { /* ignore auto-title failures */ }
+    }
+
+    private async exportChat(format: "markdown" | "json"): Promise<void> {
+        if (!this.activeChat || !this.history.length) {
+            vscode.window.showWarningMessage("OnlySq: nothing to export");
+            return;
+        }
+        const title = this.activeChat.title || "chat";
+        const safeTitle = title.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 40);
+
+        if (format === "json") {
+            const data = {
+                title: this.activeChat.title,
+                id: this.activeChat.id,
+                createdAt: this.activeChat.createdAt,
+                updatedAt: this.activeChat.updatedAt,
+                messages: this.history.filter(
+                    (m) => m.role === "user" || m.role === "assistant"
+                ).map(m => ({ role: m.role, content: m.content ?? "" })),
+            };
+            const content = JSON.stringify(data, null, 2);
+            const uri = await vscode.window.showSaveDialog({
+                defaultUri: vscode.Uri.file(`${safeTitle}.json`),
+                filters: { JSON: ["json"] },
+            });
+            if (uri) {
+                await vscode.workspace.fs.writeFile(
+                    uri,
+                    Buffer.from(content, "utf-8")
+                );
+                vscode.window.showInformationMessage(`Exported to ${uri.fsPath}`);
+            }
+        } else {
+            let md = `# ${title}\n\n`;
+            for (const m of this.history) {
+                if (m.role === "user") {
+                    md += `## You\n\n${m.content ?? ""}\n\n`;
+                } else if (m.role === "assistant") {
+                    md += `## OnlySq\n\n${m.content ?? ""}\n\n`;
+                }
+            }
+            const uri = await vscode.window.showSaveDialog({
+                defaultUri: vscode.Uri.file(`${safeTitle}.md`),
+                filters: { Markdown: ["md"] },
+            });
+            if (uri) {
+                await vscode.workspace.fs.writeFile(
+                    uri,
+                    Buffer.from(md, "utf-8")
+                );
+                vscode.window.showInformationMessage(`Exported to ${uri.fsPath}`);
+            }
+        }
     }
 
     private disposeSubs(): void {

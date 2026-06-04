@@ -55,10 +55,16 @@
     const chatsNewBtn = $("chatsNewBtn");
     const chatTitleEl = $("chatTitle");
     const HISTORY_WINDOW = 30;
+    const pauseBtn = $("pauseBtn");
     const settingsBtn = $("settingsBtn");
     const settingsPanel = $("settingsPanel");
     const settingsClose = $("settingsClose");
     const settingsBody = $("settingsBody");
+    const exportBtn = $("exportBtn");
+    const exportMenu = $("exportMenu");
+    const mentionPopup = $("mentionPopup");
+    const dropOverlay = $("dropOverlay");
+    const attachedFilesEl = $("attachedFiles");
 
     let mode = "chat";
     let currentBody = null;
@@ -73,11 +79,20 @@
     let chatsQuery = "";
     let canLoadMore = false;
     let isLoadingMore = false;
+    let paused = false;
     let stickToBottom = true;
     let scrollBtn = null;
     let userScrolling = false;
     let userScrollEndTimer;
     let scrollTrimDebounce;
+    let mentionActive = false;
+    let mentionStart = -1;
+    let mentionIdx = 0;
+    let mentionItems = [];
+    let attachedFiles = []; // {name, path, content}
+    let pendingEditIds = []; // for multi-diff
+    let lastAppliedEditId = null; // for undo
+    let activeEditFinish = null; // callback for active msg edit
 
     let savedHeight =
         parseInt(localStorage.getItem("onlysq.composerH") || "0", 10) || 0;
@@ -115,9 +130,12 @@
         if (b) {
             sendBtn.style.display = "none";
             stopBtn.style.display = "";
+            if (pauseBtn) pauseBtn.style.display = (mode === "agent" || mode === "plan") ? "" : "none";
         } else {
             sendBtn.style.display = "";
             stopBtn.style.display = "none";
+            if (pauseBtn) pauseBtn.style.display = "none";
+            setPaused(false);
         }
         updateSendActive();
     }
@@ -168,11 +186,27 @@
 
     function setMode(m) {
         mode = m;
-        agentBtn.classList.toggle("on", m === "agent");
-        agentBtn.title =
-            m === "agent"
-                ? "Agent mode: ON (file edits enabled)"
-                : "Agent mode: OFF";
+        var bar = $("modeBar");
+        if (bar) {
+            bar.querySelectorAll(".mode-opt").forEach(function(b) {
+                b.classList.toggle("active", b.dataset.mode === m);
+            });
+            // Position slider on the active button
+            positionSlider(bar, m);
+        }
+        document.body.classList.remove("mode-agent", "mode-chat", "mode-plan");
+        document.body.classList.add("mode-" + m);
+        try { localStorage.setItem("onlysq.mode", m); } catch(e) {}
+    }
+
+    function positionSlider(bar, m) {
+        var slider = $("modeSlider");
+        var btn = bar.querySelector('.mode-opt[data-mode="' + m + '"]');
+        if (!slider || !btn) return;
+        var colors = { agent: "var(--mode-agent)", chat: "var(--mode-chat)", plan: "var(--mode-plan)" };
+        slider.style.left = btn.offsetLeft + "px";
+        slider.style.width = btn.offsetWidth + "px";
+        slider.style.background = colors[m] || "var(--accent)";
     }
 
     function setModel(id, list) {
@@ -188,8 +222,21 @@
     );
     const inlineRe = new RegExp(BT + "([^" + BT + "\\n]+)" + BT, "g");
 
+    // Extract <thinking> blocks for reasoning display
+    var thinkingRe = /<thinking>([\s\S]*?)<\/thinking>/gi;
+
     function renderMarkdown(text) {
         if (!text) return "";
+        // Render thinking blocks first
+        var thinkingBlocks = "";
+        text = text.replace(thinkingRe, function(_, content) {
+            thinkingBlocks += '<div class="reasoning-block">' +
+                '<div class="reasoning-head" onclick="this.parentElement.classList.toggle(\'open\')">' +
+                '<span class="r-arrow">\u25B6</span> <span>Thinking\u2026</span></div>' +
+                '<div class="reasoning-body">' + escapeHtml(content.trim()) + '</div></div>';
+            return '';
+        });
+        if (!text.trim() && thinkingBlocks) return thinkingBlocks;
         let out = "";
         let last = 0;
         const re = new RegExp(fenceRe);
@@ -198,16 +245,23 @@
             out += renderProse(text.slice(last, m.index));
             const lang = m[1] || "";
             const code = m[2];
+            const langLabel = lang ? escapeHtml(lang) : "code";
+            const escapedCode = escapeHtml(code);
             out +=
+                '<div class="code-block-wrap">' +
+                '<div class="code-block-header">' +
+                '<span class="code-lang">' + langLabel + '</span>' +
+                '<button class="code-copy-btn" data-code="' + escapedCode.replace(/"/g, '&quot;') + '">Copy</button>' +
+                '</div>' +
                 '<pre><code class="lang-' +
                 escapeHtml(lang) +
                 '">' +
                 highlightCode(code, lang) +
-                "</code></pre>";
+                "</code></pre></div>";
             last = m.index + m[0].length;
         }
         out += renderProse(text.slice(last));
-        return out;
+        return thinkingBlocks + out;
     }
     function renderProse(text) {
         if (!text) return "";
@@ -225,6 +279,10 @@
             );
         }
         const lines = trimmed.split("\n");
+        // Table detection
+        if (lines.length >= 2 && /^\|/.test(lines[0]) && /^[\|\s:-]+$/.test(lines[1])) {
+            return renderTable(lines);
+        }
         if (lines.every((l) => /^\s*[-*+]\s+/.test(l) || /^\s+/.test(l))) {
             return renderList(lines, false);
         }
@@ -239,6 +297,24 @@
         }
         if (/^(-{3,}|\*{3,}|_{3,})$/.test(trimmed)) return "<hr/>";
         return "<p>" + renderInlineMd(trimmed.replace(/\n/g, " ")) + "</p>";
+    }
+    function renderTable(lines) {
+        var headerCells = lines[0].split("|").map(function(c) { return c.trim(); }).filter(Boolean);
+        var rows = [];
+        for (var i = 2; i < lines.length; i++) {
+            if (!lines[i].trim() || !/^\|/.test(lines[i])) break;
+            rows.push(lines[i].split("|").map(function(c) { return c.trim(); }).filter(Boolean));
+        }
+        var html = "<table><thead><tr>";
+        headerCells.forEach(function(c) { html += "<th>" + renderInlineMd(c) + "</th>"; });
+        html += "</tr></thead><tbody>";
+        rows.forEach(function(row) {
+            html += "<tr>";
+            row.forEach(function(c) { html += "<td>" + renderInlineMd(c) + "</td>"; });
+            html += "</tr>";
+        });
+        html += "</tbody></table>";
+        return html;
     }
     function renderList(lines, ordered) {
         const tag = ordered ? "ol" : "ul";
@@ -380,6 +456,12 @@
         );
     }
 
+    function estimateTokens(text) {
+        if (!text) return 0;
+        // Rough estimate: ~4 chars per token for English, ~2 for code
+        return Math.round(text.length / 3.5);
+    }
+
     function renderEmpty() {
         logBody.innerHTML = "";
         const e = el("div", "empty", logBody);
@@ -405,7 +487,8 @@
         const empty = logBody.querySelector(".empty");
         if (empty) empty.remove();
         const m = document.createElement("div");
-        m.className = "msg " + role;
+        m.className = "msg " + role + " new-msg";
+        setTimeout(function() { m.classList.remove("new-msg"); }, 200);
 
         const head = el("div", "msg-head", m);
         const r = el("span", "role", head);
@@ -427,6 +510,11 @@
         copyBtn.textContent = "Copy";
         copyBtn.title = "Copy text";
         copyBtn.addEventListener("click", () => copyText(m));
+
+        if (text && text.length > 10) {
+            var tokSpan = el("span", "msg-tokens", head);
+            tokSpan.textContent = "\u2248" + estimateTokens(text) + " tok";
+        }
 
         const body = el("div", "body", m);
         body.innerHTML = renderMarkdown(text);
@@ -492,25 +580,11 @@
             ta.setSelectionRange(ta.value.length, ta.value.length);
         }, 20);
 
-        function finish(commit) {
-            const next = ta.value;
-            msgEl.classList.remove("editing");
-            if (commit && next.trim()) {
-                const idx = visibleIndexOf(msgEl);
-                vscode.postMessage({
-                    type: "editMessage",
-                    index: idx,
-                    text: next,
-                    mode,
-                });
-            } else {
-                body.innerHTML = renderMarkdown(raw);
-            }
-        }
+        activeEditFinish = finish;
         save.addEventListener("click", () => finish(true));
         cancel.addEventListener("click", () => finish(false));
         ta.addEventListener("keydown", (e) => {
-            if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+            if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
                 finish(true);
             }
@@ -519,6 +593,22 @@
                 finish(false);
             }
         });
+        function finish(commit) {
+            activeEditFinish = null;
+            var next = ta.value;
+            msgEl.classList.remove("editing");
+            if (commit && next.trim()) {
+                var idx = visibleIndexOf(msgEl);
+                vscode.postMessage({
+                    type: "editMessage",
+                    index: idx,
+                    text: next,
+                    mode: mode,
+                });
+            } else {
+                body.innerHTML = renderMarkdown(raw);
+            }
+        }
     }
 
     function renderHistoryMessages(messages, prepend) {
@@ -621,18 +711,71 @@
             values,
             "bool"
         );
+        settingRow(
+            agent,
+            "Personalization",
+            "agent.personalization",
+            values,
+            "bool"
+        );
+        settingRow(
+            agent,
+            "Custom system prompt",
+            "agent.customSystemPrompt",
+            values,
+            "textarea"
+        );
 
         const approval = el("section", "card", settingsBody);
-        approval.innerHTML = '<div class="card-title">Approval policy</div>';
-        [
-            ["File writes", "approval.write"],
-            ["Deletions", "approval.delete"],
-            ["Renames", "approval.rename"],
-            ["Shell commands", "approval.shell"],
-            ["VS Code commands", "approval.vscodeCommand"],
-        ].forEach(([label, key]) =>
-            settingRow(approval, label, key, values, "enum-approval")
-        );
+        approval.innerHTML = '<div class="card-title">Tool Policy</div>' +
+            '<div class="small muted" style="margin-bottom:8px">Per-tool: always (auto-approve) / ask (prompt) / never (deny) / disabled (hide from agent)</div>';
+        var policy = values["agent.toolPolicy"] || {};
+        var toolGroups = {
+            "Read-only": ["read_file","list_dir","list_tree","search","find_files","file_info","find_in_file",
+                "open_file","goto_position","get_cursor","get_selection","list_open_files","get_diagnostics",
+                "list_tasks","git_status","git_diff","workspace_info","system_info"],
+            "File edits": ["propose_edit","apply_at_line","replace_in_file","patch_file","delete_file","rename_file"],
+            "Shell / commands": ["run_command","run_command_interactive","run_task","run_vscode_command","open_in_browser","git_commit"],
+            "Web": ["fetch_url","web_search","scrape_page"],
+            "Meta": ["pause_agent","ask_user","delegate"],
+        };
+        Object.entries(toolGroups).forEach(function(entry) {
+            var groupName = entry[0], toolNames = entry[1];
+            var sub = el("div", "", approval);
+            sub.style.marginBottom = "8px";
+            var subTitle = el("div", "small muted", sub);
+            subTitle.style.fontWeight = "600";
+            subTitle.style.marginBottom = "4px";
+            subTitle.textContent = groupName;
+            toolNames.forEach(function(tn) {
+                var row = el("div", "setting-row", sub);
+                row.style.padding = "2px 0";
+                var lab = el("label", "setting-label", row);
+                lab.textContent = tn;
+                lab.style.fontSize = "11px";
+                lab.style.fontFamily = "var(--vscode-editor-font-family)";
+                var ctl = el("div", "setting-control", row);
+                var sel = document.createElement("select");
+                sel.className = "setting-input";
+                sel.style.fontSize = "10px";
+                sel.style.padding = "1px 4px";
+                var cur = policy[tn] || "";
+                ["always","ask","never","disabled"].forEach(function(v) {
+                    var o = document.createElement("option");
+                    o.value = v;
+                    o.textContent = v;
+                    if (v === cur) o.selected = true;
+                    sel.appendChild(o);
+                });
+                ctl.appendChild(sel);
+                sel.addEventListener("change", function() {
+                    var updated = Object.assign({}, policy);
+                    updated[tn] = sel.value;
+                    policy = updated;
+                    vscode.postMessage({ type: "setSetting", key: "agent.toolPolicy", value: updated });
+                });
+            });
+        });
 
         const diag = el("section", "card", settingsBody);
         diag.innerHTML = '<div class="card-title">Diagnostics</div>';
@@ -714,6 +857,34 @@
                 modelSearch.value = "";
                 renderModels("");
                 setTimeout(() => modelSearch.focus(), 20);
+            });
+        } else if (kind === "textarea") {
+            var ta = document.createElement("textarea");
+            ta.className = "setting-input";
+            ta.style.width = "100%";
+            ta.style.minHeight = "50px";
+            ta.style.resize = "vertical";
+            ta.value = String(current ?? "");
+            ta.placeholder = "Enter custom instructions...";
+            ctl.appendChild(ta);
+            ta.addEventListener("change", function() {
+                vscode.postMessage({ type: "setSetting", key: key, value: ta.value });
+            });
+        } else if (kind === "textarea-list") {
+            var ta2 = document.createElement("textarea");
+            ta2.className = "setting-input";
+            ta2.style.width = "100%";
+            ta2.style.minHeight = "40px";
+            ta2.style.resize = "vertical";
+            ta2.value = Array.isArray(current) ? current.join(", ") : String(current ?? "");
+            ta2.placeholder = "run_command, delete_file, ...";
+            ctl.appendChild(ta2);
+            var hint = el("div", "small muted", ctl);
+            hint.textContent = "Comma-separated tool names to disable";
+            hint.style.marginTop = "2px";
+            ta2.addEventListener("change", function() {
+                var arr = ta2.value.split(",").map(function(s) { return s.trim(); }).filter(Boolean);
+                vscode.postMessage({ type: "setSetting", key: key, value: arr });
             });
         }
     }
@@ -810,10 +981,96 @@
     function showStatusPill(text) {
         clearStatusPill();
         statusPill = el("div", "status-pill", logBody);
-        statusPill.innerHTML =
-            '<span class="sdot"></span><span class="stext"></span>';
-        statusPill.querySelector(".stext").textContent = text;
+        var dots = el("div", "status-dots", statusPill);
+        el("span", "", dots);
+        el("span", "", dots);
+        el("span", "", dots);
+        var label = el("span", "stext", statusPill);
+        label.textContent = text;
         scrollToBottom();
+    }
+
+    function renderAskUser(id, question, options, multiSelect) {
+        const wrap = el("div", "ask-user-block", logBody);
+        wrap.dataset.id = id;
+
+        const q = el("div", "ask-question", wrap);
+        q.innerHTML = renderMarkdown(question);
+
+        if (options && options.length) {
+            const form = el("div", "ask-options", wrap);
+            const type = multiSelect ? "checkbox" : "radio";
+            const selected = new Set();
+
+            options.forEach(function (opt) {
+                const label = el("label", "ask-option", form);
+                const cb = document.createElement("input");
+                cb.type = type;
+                cb.name = "ask-" + id;
+                cb.value = opt;
+                label.appendChild(cb);
+                const span = el("span", "", label);
+                span.textContent = opt;
+                cb.addEventListener("change", function () {
+                    if (multiSelect) {
+                        if (cb.checked) selected.add(opt);
+                        else selected.delete(opt);
+                    } else {
+                        selected.clear();
+                        selected.add(opt);
+                    }
+                    submitBtn.disabled = selected.size === 0;
+                });
+            });
+
+            const actions = el("div", "ask-actions", wrap);
+            var submitBtn = el("button", "btn primary small", actions);
+            submitBtn.textContent = "Reply";
+            submitBtn.disabled = true;
+            submitBtn.addEventListener("click", function () {
+                var answer = Array.from(selected).join(", ");
+                submitAnswer(id, answer, wrap);
+            });
+        } else {
+            var inputWrap = el("div", "ask-input-wrap", wrap);
+            var ta = document.createElement("textarea");
+            ta.className = "ask-input";
+            ta.rows = 2;
+            ta.placeholder = "Type your answer\u2026";
+            inputWrap.appendChild(ta);
+
+            var actions2 = el("div", "ask-actions", wrap);
+            var submitBtn2 = el("button", "btn primary small", actions2);
+            submitBtn2.textContent = "Reply";
+            submitBtn2.disabled = true;
+            ta.addEventListener("input", function () {
+                submitBtn2.disabled = !ta.value.trim();
+            });
+            ta.addEventListener("keydown", function (e) {
+                if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                    e.preventDefault();
+                    if (ta.value.trim()) submitAnswer(id, ta.value.trim(), wrap);
+                }
+            });
+            submitBtn2.addEventListener("click", function () {
+                if (ta.value.trim()) submitAnswer(id, ta.value.trim(), wrap);
+            });
+
+            setTimeout(function () { ta.focus(); }, 20);
+        }
+
+        scrollToBottom();
+    }
+
+    function submitAnswer(id, answer, wrap) {
+        vscode.postMessage({ type: "answerUser", id: id, answer: answer });
+        wrap.innerHTML = "";
+        wrap.className = "ask-user-answered";
+        var badge = el("div", "ask-answered-badge", wrap);
+        badge.innerHTML =
+            '<span class="ask-check">\u2713</span> <span>Answered: ' +
+            escapeHtml(answer) +
+            "</span>";
     }
 
     const FILE_TOOLS = new Set([
@@ -849,10 +1106,39 @@
         run_command_interactive: "Starting",
         git_status: "Git status",
         git_diff: "Git diff",
+        delegate: "Delegating to",
+        pause_agent: "Pausing",
+        ask_user: "Asking",
+        fetch_url: "Fetching",
+        web_search: "Searching web",
+        scrape_page: "Scraping",
+        git_commit: "Committing",
+        add_memory: "Remembering",
+        get_memory: "Recalling",
+        view_memories: "Listing memories",
+        delete_memory: "Forgetting",
+        create_task: "Creating task",
+        update_task: "Updating task",
+        delete_task: "Removing task",
+        list_agent_tasks: "Listing tasks",
     };
 
     function summarizeArgs(name, args) {
         try {
+            if (name === "delegate") {
+                return args?.agent ? args.agent + ": " + (args.goal || "").slice(0, 60) : "(unknown)";
+            }
+            if (name === "ask_user") return args?.question ? args.question.slice(0, 60) : "(question)";
+            if (name === "pause_agent") return args?.reason ? args.reason.slice(0, 60) : "(pause)";
+            if (name === "fetch_url" || name === "scrape_page") return args?.url || "";
+            if (name === "web_search") return args?.query || "";
+            if (name === "git_commit") return args?.message ? args.message.slice(0, 60) : "";
+            if (name === "add_memory") return args?.key ? args.key + " = " + (args.value || "").slice(0, 40) : "";
+            if (name === "get_memory" || name === "delete_memory") return args?.key || "";
+            if (name === "view_memories") return args?.query || "(all)";
+            if (name === "create_task") return args?.text ? args.text.slice(0, 50) : "";
+            if (name === "update_task") return args?.id ? args.id + " → " + (args.status || "") : "";
+            if (name === "delete_task") return args?.id || "";
             if (FILE_TOOLS.has(name) && args && args.path) {
                 if (name === "apply_at_line") {
                     const r =
@@ -936,28 +1222,72 @@
         return block;
     }
 
+    var TASK_TOOLS = {create_task: true, update_task: true, delete_task: true, list_agent_tasks: true};
+
+    function renderTaskWidget(name, args, result) {
+        var dotClass = "created";
+        var icon = "+";
+        var label = "";
+        if (name === "create_task") {
+            dotClass = "created";
+            icon = "+";
+            label = "Created task: <strong>" + escapeHtml((args && args.text) || result || "").slice(0, 60) + "</strong>";
+        } else if (name === "update_task") {
+            var st = args && args.status;
+            if (st === "done") { dotClass = "completed"; icon = "\u2713"; }
+            else if (st === "in_progress") { dotClass = "updated"; icon = "\u25B6"; }
+            else { dotClass = "updated"; icon = "\u2022"; }
+            label = "Updated <strong>" + escapeHtml((args && args.id) || "") + "</strong> \u2192 " + escapeHtml(st || "");
+        } else if (name === "delete_task") {
+            dotClass = "deleted";
+            icon = "\u2717";
+            label = "Removed task: <strong>" + escapeHtml((args && args.id) || "") + "</strong>";
+        } else {
+            return null; // list_agent_tasks — use standard block
+        }
+        var w = document.createElement("div");
+        w.className = "task-activity";
+        w.innerHTML = '<div class="task-dot ' + dotClass + '">' + icon + '</div>' +
+            '<div class="task-line"></div>' +
+            '<div class="task-label">' + label + '</div>';
+        return w;
+    }
+
     function setToolResult(id, name, args, result) {
-        const block = toolBlocks.get(id);
+        var block = toolBlocks.get(id);
         if (!block) return;
-        const isError = /^Error:/i.test(result || "");
-        const spinner = block.querySelector(".tspinner");
+        var isError = /^Error:/i.test(result || "");
+
+        // Task tools: replace standard block with activity widget
+        if (TASK_TOOLS[name] && !isError && name !== "list_agent_tasks") {
+            var widget = renderTaskWidget(name, args, result);
+            if (widget) {
+                block.parentNode.insertBefore(widget, block);
+                block.style.display = "none";
+                scrollToBottom();
+                return;
+            }
+        }
+
+        var spinner = block.querySelector(".tspinner");
         if (spinner) {
             spinner.outerHTML = isError
-                ? '<span class="txmark">✗</span>'
-                : '<span class="tcheck">✓</span>';
+                ? '<span class="txmark">\u2717</span>'
+                : '<span class="tcheck">\u2713</span>';
         }
         if (isError) block.classList.add("error");
 
-        const body = block.querySelector(".tool-body");
-        const r = el("div", "", body);
+        var body = block.querySelector(".tool-body");
+        var r = el("div", "", body);
         r.innerHTML =
             '<div class="tlabel">Result</div><div class="tresult"></div>';
         r.querySelector(".tresult").textContent =
             result && result.length > 4000
-                ? result.slice(0, 4000) + "\n…(truncated)"
+                ? result.slice(0, 4000) + "\n\u2026(truncated)"
                 : result || "";
 
         if (EDIT_TOOLS.has(name) && !isError) {
+            trackPendingEdit(id);
             const act = el("div", "tool-actions", block);
             const viewBtn = el("button", "btn ghost small", act);
             viewBtn.textContent = "View diff";
@@ -979,50 +1309,92 @@
                 rejectBtn.disabled = true;
                 vscode.postMessage({ type: "rejectEdit", id });
             });
+
+            // Cascading Apply All: show on last pending edit if 2+
+            updateApplyAllButtons();
         }
 
         scrollToBottom();
     }
 
     function updateEditResult(id, state) {
-        const block = toolBlocks.get(id);
+        var block = toolBlocks.get(id);
         if (!block) return;
         block.classList.remove("error");
-        if (state === "applied") block.classList.add("applied");
+        removePendingEdit(id);
+        if (state === "applied") {
+            block.classList.add("applied");
+            lastAppliedEditId = id;
+            var metaEl = block.querySelector(".tmeta");
+            var filePath = metaEl ? metaEl.textContent : "";
+            showUndoBar(id, filePath);
+        }
         if (state === "rejected") block.classList.add("rejected");
-        const actions = block.querySelector(".tool-actions");
+        var actions = block.querySelector(".tool-actions");
         if (actions) {
             actions.innerHTML = "";
-            const viewBtn = document.createElement("button");
+            var statusLabel = document.createElement("span");
+            statusLabel.className = "status-label";
+            statusLabel.textContent = state === "applied" ? "\u2713 Applied" : "\u2717 Rejected";
+            actions.appendChild(statusLabel);
+            var viewBtn = document.createElement("button");
             viewBtn.className = "btn ghost small";
             viewBtn.textContent = "View diff";
-            viewBtn.addEventListener("click", () =>
-                vscode.postMessage({ type: "showDiff", id })
-            );
+            viewBtn.addEventListener("click", function() {
+                vscode.postMessage({ type: "showDiff", id: id });
+            });
             actions.appendChild(viewBtn);
-            const label = document.createElement("span");
-            label.className = "small muted";
-            label.style.marginLeft = "6px";
-            label.style.alignSelf = "center";
-            label.textContent =
-                state === "applied" ? "✓ Applied" : "✗ Rejected";
-            actions.appendChild(label);
         }
     }
 
     function send() {
         if (!signedIn) return;
-        const text = inp.value.trim();
-        if (!text || streaming) return;
-        addMsg("user", text);
+        // If editing a message, submit the edit
+        if (activeEditFinish) {
+            activeEditFinish(true);
+            return;
+        }
+        var rawText = inp.value.trim();
+        if (!rawText) return;
+
+        // During streaming in agent mode: send as live message
+        if (streaming && (mode === "agent" || mode === "plan")) {
+            addMsg("user", rawText);
+            inp.value = "";
+            autoSize();
+            vscode.postMessage({ type: "send", text: rawText, mode: "agent" });
+            return;
+        }
+        if (streaming) return;
+
+        // Build the final text with attached files context
+        var finalText = rawText;
+        var imageUrls = [];
+        if (attachedFiles.length) {
+            var ctx = "";
+            attachedFiles.forEach(function (af) {
+                if (af.isImage && af.content) {
+                    imageUrls.push(af.content);
+                } else {
+                    var snippet = (af.content || "").slice(0, 8000);
+                    ctx += "\n`" + (af.path || af.name) + "`:\n```\n" + snippet + "\n```\n";
+                }
+            });
+            if (ctx) finalText += "\n\n---\n**Attached files:**" + ctx;
+            attachedFiles = [];
+            renderAttachedFiles();
+        }
+
+        addMsg("user", rawText);
         forceScrollToBottom(true);
         inp.value = "";
         autoSize();
         showStatusPill("Thinking…");
         toolBlocks.clear();
+        pendingEditIds = [];
         finalizeCurrent();
         setStreaming(true);
-        vscode.postMessage({ type: "send", text, mode });
+        vscode.postMessage({ type: "send", text: finalText, mode: mode, images: imageUrls.length ? imageUrls : undefined });
     }
 
     function autoSize() {
@@ -1102,9 +1474,50 @@
     stopBtn.addEventListener("click", () =>
         vscode.postMessage({ type: "cancel" })
     );
-    agentBtn.addEventListener("click", () =>
-        setMode(mode === "agent" ? "chat" : "agent")
-    );
+
+    function setPaused(value, reason) {
+        paused = !!value;
+        if (pauseBtn) {
+            pauseBtn.classList.toggle("on", paused);
+            pauseBtn.title = paused ? "Resume agent" : "Pause after current step";
+            // SVG: play triangle when paused, pause bars when running
+            pauseBtn.innerHTML = paused
+                ? '<svg viewBox="0 0 24 24"><polygon points="6,4 20,12 6,20" fill="currentColor" stroke="none"/></svg>'
+                : '<svg viewBox="0 0 24 24"><line x1="10" y1="6" x2="10" y2="18"/><line x1="14" y1="6" x2="14" y2="18"/></svg>';
+        }
+        if (paused) {
+            showStatusPill(reason || "Paused. Press Resume to continue.");
+        } else {
+            if (statusPill) clearStatusPill();
+        }
+    }
+
+    if (pauseBtn) {
+        pauseBtn.addEventListener("click", () => {
+            vscode.postMessage({ type: "togglePause" });
+        });
+    }
+
+    // Triple mode switch
+    var modeBarEl = $("modeBar");
+    if (modeBarEl) {
+        modeBarEl.querySelectorAll(".mode-opt").forEach(function(btn) {
+            btn.addEventListener("click", function() {
+                setMode(btn.dataset.mode);
+            });
+        });
+    }
+    // Initial position after layout settles
+    try {
+        var savedMode = localStorage.getItem("onlysq.mode");
+        if (savedMode && ["agent","chat","plan"].indexOf(savedMode) >= 0) setMode(savedMode);
+        else setMode("chat");
+    } catch(e) { setMode("chat"); }
+    // Re-position slider on resize
+    window.addEventListener("resize", function() {
+        var b = $("modeBar");
+        if (b) positionSlider(b, mode);
+    });
 
     newBtn.addEventListener("click", () => {
         vscode.postMessage({ type: "newChat" });
@@ -1152,7 +1565,7 @@
     });
     document.addEventListener("click", (e) => {
         if (chatsPanel.style.display === "none") return;
-        if (!chatsPanel.contains(e.target) && e.target !== chatsBtn) {
+        if (!chatsPanel.contains(e.target) && !chatsBtn.contains(e.target)) {
             showChatsPanel(false);
         }
     });
@@ -1370,15 +1783,7 @@
             updateScrollBtn();
         }
 
-        if (atBottom) {
-            clearTimeout(scrollTrimDebounce);
-            scrollTrimDebounce = setTimeout(() => {
-                const totalMsgs = logBody.querySelectorAll(".msg").length;
-                if (totalMsgs > HISTORY_WINDOW) {
-                    vscode.postMessage({ type: "trimToWindow" });
-                }
-            }, 600);
-        }
+        clearTimeout(scrollTrimDebounce);
     });
 
     window.addEventListener("message", (e) => {
@@ -1399,19 +1804,87 @@
                 clearStatusPill();
                 if (!currentBody) startAssistantBody();
                 currentAcc += m.text;
+                // Mark existing children so we can animate only new ones
+                var prevCount = currentBody.childNodes.length;
                 currentBody.innerHTML = renderMarkdown(currentAcc);
-                const parentMsg = currentBody.closest(".msg");
-                if (parentMsg) parentMsg.dataset.raw = currentAcc;
+                // Animate only newly added top-level children
+                var kids = currentBody.childNodes;
+                for (var ci = prevCount; ci < kids.length; ci++) {
+                    if (kids[ci].nodeType === 1) kids[ci].style.animation = "chunkIn 0.18s ease-out";
+                }
+                var parentMsg2 = currentBody.closest(".msg");
+                if (parentMsg2) {
+                    parentMsg2.dataset.raw = currentAcc;
+                    parentMsg2.classList.remove("new-msg");
+                }
                 currentBody.classList.add("cursor");
                 scrollToBottom();
                 break;
-            case "tool-call":
-                if (currentBody) {
-                    currentBody.classList.remove("cursor");
-                    currentBody = null;
-                    currentAcc = "";
+            case "tool-call-partial":
+                // Show ghost/streaming tool preview
+                if (!toolBlocks.has(m.id)) {
+                    if (currentBody) {
+                        currentBody.classList.remove("cursor");
+                        currentBody = null;
+                        currentAcc = "";
+                    }
+                    var ghost = addToolBlock(m.id, m.name, {});
+                    if (ghost) {
+                        ghost.classList.add("streaming-tool");
+                        // Replace spinner with streaming dots
+                        var spinner = ghost.querySelector(".tspinner");
+                        if (spinner) {
+                            spinner.innerHTML = '<span></span><span></span><span></span>';
+                            spinner.className = 'streaming-dots';
+                        }
+                    }
                 }
-                addToolBlock(m.id, m.name, m.args);
+                // Update partial args + meta in real time
+                var partial = toolBlocks.get(m.id);
+                if (partial && partial.classList.contains("streaming-tool")) {
+                    var metaP = partial.querySelector(".tmeta");
+                    if (metaP) {
+                        try {
+                            var pArgs = JSON.parse(m.argsPartial || "{}");
+                            metaP.textContent = summarizeArgs(m.name, pArgs);
+                        } catch(e) { /* partial JSON, try to show raw */ }
+                    }
+                    // Live update body args preview
+                    var bodyP = partial.querySelector(".targs");
+                    if (bodyP && m.argsPartial && m.argsPartial.length > 2) {
+                        try {
+                            bodyP.innerHTML = highlightCode(JSON.stringify(JSON.parse(m.argsPartial), null, 2));
+                        } catch(e) {
+                            bodyP.textContent = m.argsPartial;
+                        }
+                    }
+                }
+                scrollToBottom();
+                break;
+            case "tool-call":
+                // Finalize: remove ghost state if it existed
+                var existingGhost = toolBlocks.get(m.id);
+                if (existingGhost && existingGhost.classList.contains("streaming-tool")) {
+                    existingGhost.classList.remove("streaming-tool");
+                    // Restore spinner
+                    var dots = existingGhost.querySelector(".streaming-dots");
+                    if (dots) dots.outerHTML = '<span class="tspinner"></span>';
+                    // Update with real args
+                    var metaR = existingGhost.querySelector(".tmeta");
+                    if (metaR) metaR.textContent = summarizeArgs(m.name, m.args);
+                    var nameR = existingGhost.querySelector(".tname");
+                    if (nameR) nameR.textContent = m.name;
+                    // Update body args
+                    var bodyR = existingGhost.querySelector(".targs");
+                    if (bodyR) bodyR.innerHTML = highlightCode(JSON.stringify(m.args, null, 2));
+                } else {
+                    if (currentBody) {
+                        currentBody.classList.remove("cursor");
+                        currentBody = null;
+                        currentAcc = "";
+                    }
+                    addToolBlock(m.id, m.name, m.args);
+                }
                 break;
             case "tool-result":
                 setToolResult(m.id, m.name, m.args, m.result);
@@ -1422,6 +1895,11 @@
                 break;
             case "thinking":
                 showStatusPill(m.text || "Thinking…");
+                break;
+            case "step":
+                if (m.step && m.maxSteps) {
+                    showStatusPill("Step " + m.step + "/" + m.maxSteps);
+                }
                 break;
             case "done":
                 finalizeCurrent();
@@ -1436,6 +1914,8 @@
                     const e2 = el("div", "err small muted", logBody);
                     e2.textContent = "[" + m.reason + "]";
                 }
+                // Auto-group completed tool blocks
+                setTimeout(groupCompletedTools, 100);
                 break;
             case "error":
                 clearStatusPill();
@@ -1468,6 +1948,7 @@
                 loadMoreBtn.textContent = "Load previous messages";
                 break;
             case "trimTo":
+                if (streaming) break;
                 {
                     const msgs = Array.from(logBody.querySelectorAll(".msg"));
                     const drop = msgs.length - m.keep;
@@ -1502,12 +1983,53 @@
                 if (chatsPanel.style.display !== "none") renderChatsList();
                 break;
 
+            case "ask-user":
+                clearStatusPill();
+                renderAskUser(m.id, m.question, m.options, m.multiSelect);
+                break;
+            case "pauseState":
+                setPaused(!!m.paused, m.reason);
+                break;
             case "settings":
                 renderSettings(m);
                 break;
             case "openSettings":
                 showSettings(true);
                 vscode.postMessage({ type: "getSettings" });
+                break;
+            case "mentionResults":
+                if (mentionActive && Array.isArray(m.files)) {
+                    mentionItems = m.files.slice(0, 10);
+                    mentionIdx = 0;
+                    renderMentionPopup();
+                }
+                break;
+            case "fileContent":
+                if (typeof m.path === "string" && typeof m.content === "string") {
+                    // add as attached file if not already present
+                    var exists = attachedFiles.some(function(af) { return af.path === m.path; });
+                    if (!exists) {
+                        var name = m.path.split("/").pop() || m.path;
+                        attachedFiles.push({ name: name, path: m.path, content: m.content, isImage: false });
+                        renderAttachedFiles();
+                    }
+                }
+                break;
+            case "undoResult":
+                if (m.success) {
+                    var undoBar = logBody.querySelector('.undo-bar[data-id="' + m.id + '"]');
+                    if (undoBar) {
+                        undoBar.innerHTML = '<span class="small muted">✓ Undone</span>';
+                        setTimeout(function() { undoBar.remove(); }, 2000);
+                    }
+                    // reset the edit block state
+                    var block = toolBlocks.get(m.id);
+                    if (block) {
+                        block.classList.remove("applied");
+                        // re-add pending
+                        trackPendingEdit(m.id);
+                    }
+                }
                 break;
         }
     });
@@ -1683,6 +2205,437 @@
         chatsPanel.dataset.visible = visible ? "true" : "false";
         chatsPanel.style.display = visible ? "flex" : "none";
     }
+
+    // ========== Feature 1: Code block copy button (delegated) ==========
+    logBody.addEventListener("click", function (e) {
+        var btn = e.target.closest(".code-copy-btn");
+        if (!btn) return;
+        var wrap = btn.closest(".code-block-wrap");
+        var codeEl = wrap && wrap.querySelector("pre code");
+        var text = codeEl ? codeEl.textContent : (btn.dataset.code || "");
+        try {
+            navigator.clipboard.writeText(text);
+            btn.textContent = "Copied!";
+            btn.classList.add("copied");
+            setTimeout(function () {
+                btn.textContent = "Copy";
+                btn.classList.remove("copied");
+            }, 1500);
+        } catch (err) {}
+    });
+
+    // ========== Slash commands autocomplete ==========
+    var SLASH_CMDS = [
+        { cmd: "/clear", desc: "Start a new chat" },
+        { cmd: "/model", desc: "Show or change model" },
+        { cmd: "/export", desc: "Export chat (md/json)" },
+        { cmd: "/memory", desc: "List all memories" },
+        { cmd: "/memory set", desc: "Store a memory" },
+        { cmd: "/memory get", desc: "Retrieve a memory" },
+        { cmd: "/memory delete", desc: "Remove a memory" },
+        { cmd: "/memory clear", desc: "Wipe all memories" },
+        { cmd: "/help", desc: "Show all commands" },
+    ];
+    var slashActive = false;
+    var slashIdx = 0;
+    var slashFiltered = [];
+
+    function checkSlash() {
+        var val = inp.value;
+        if (!val.startsWith("/")) { closeSlash(); return; }
+        var q = val.toLowerCase();
+        slashFiltered = SLASH_CMDS.filter(function(s) { return s.cmd.startsWith(q); });
+        if (!slashFiltered.length) { closeSlash(); return; }
+        slashActive = true;
+        slashIdx = 0;
+        renderSlashPopup();
+    }
+    function renderSlashPopup() {
+        if (!mentionPopup) return;
+        mentionPopup.innerHTML = "";
+        mentionPopup.classList.add("open");
+        slashFiltered.forEach(function(s, i) {
+            var it = el("div", "mention-item" + (i === slashIdx ? " active" : ""), mentionPopup);
+            it.innerHTML = '<span class="mention-icon">/</span><b>' + escapeHtml(s.cmd) + '</b>&nbsp;<span class="muted small">' + escapeHtml(s.desc) + '</span>';
+            it.addEventListener("click", function() { acceptSlash(s); });
+        });
+    }
+    function acceptSlash(s) {
+        inp.value = s.cmd + " ";
+        inp.focus();
+        autoSize();
+        closeSlash();
+    }
+    function closeSlash() {
+        slashActive = false;
+        slashFiltered = [];
+        if (mentionPopup && !mentionActive) {
+            mentionPopup.classList.remove("open");
+            mentionPopup.innerHTML = "";
+        }
+    }
+
+    // ========== Feature 2: @-mentions ==========
+    var mentionDebounce;
+    inp.addEventListener("input", function () {
+        autoSize();
+        checkSlash();
+        if (!slashActive) checkMention();
+    });
+    inp.addEventListener("keydown", function (e) {
+        if (slashActive) {
+            if (e.key === "ArrowDown") {
+                e.preventDefault();
+                slashIdx = Math.min(slashIdx + 1, slashFiltered.length - 1);
+                renderSlashPopup();
+                return;
+            } else if (e.key === "ArrowUp") {
+                e.preventDefault();
+                slashIdx = Math.max(slashIdx - 1, 0);
+                renderSlashPopup();
+                return;
+            } else if (e.key === "Tab" || (e.key === "Enter" && slashFiltered.length)) {
+                e.preventDefault();
+                acceptSlash(slashFiltered[slashIdx]);
+                return;
+            } else if (e.key === "Escape") {
+                closeSlash();
+                return;
+            }
+        }
+        if (!mentionActive) return;
+        if (e.key === "ArrowDown") {
+            e.preventDefault();
+            mentionIdx = Math.min(mentionIdx + 1, mentionItems.length - 1);
+            renderMentionPopup();
+        } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            mentionIdx = Math.max(mentionIdx - 1, 0);
+            renderMentionPopup();
+        } else if (e.key === "Enter" && mentionItems.length) {
+            e.preventDefault();
+            acceptMention(mentionItems[mentionIdx]);
+        } else if (e.key === "Escape") {
+            closeMention();
+        }
+    });
+    function checkMention() {
+        var val = inp.value;
+        var cur = inp.selectionStart;
+        var lastAt = val.lastIndexOf("@", cur - 1);
+        if (lastAt === -1 || (lastAt > 0 && /\S/.test(val[lastAt - 1]))) {
+            closeMention();
+            return;
+        }
+        var query = val.slice(lastAt + 1, cur);
+        if (/\s/.test(query) && query.length > 20) {
+            closeMention();
+            return;
+        }
+        mentionStart = lastAt;
+        mentionActive = true;
+        clearTimeout(mentionDebounce);
+        mentionDebounce = setTimeout(function () {
+            vscode.postMessage({ type: "mentionSearch", query: query });
+        }, 150);
+    }
+    function closeMention() {
+        mentionActive = false;
+        mentionStart = -1;
+        mentionIdx = 0;
+        mentionItems = [];
+        if (mentionPopup) mentionPopup.classList.remove("visible");
+    }
+    function renderMentionPopup() {
+        if (!mentionPopup || !mentionItems.length) {
+            if (mentionPopup) mentionPopup.classList.remove("visible");
+            return;
+        }
+        mentionPopup.innerHTML = "";
+        mentionPopup.classList.add("visible");
+        mentionItems.forEach(function (file, i) {
+            var it = el("div", "mention-item" + (i === mentionIdx ? " active" : ""), mentionPopup);
+            it.innerHTML = '<span class="mention-icon">📄</span><span class="mention-path">' + escapeHtml(file) + '</span>';
+            it.addEventListener("mousedown", function (e) {
+                e.preventDefault();
+                acceptMention(file);
+            });
+        });
+    }
+    function acceptMention(file) {
+        var val = inp.value;
+        var cur = inp.selectionStart;
+        var before = val.slice(0, mentionStart);
+        var after = val.slice(cur);
+        inp.value = before + "@" + file + " " + after;
+        var newPos = before.length + 1 + file.length + 1;
+        inp.setSelectionRange(newPos, newPos);
+        closeMention();
+        // Request file content to attach
+        vscode.postMessage({ type: "readFileContent", path: file });
+        autoSize();
+    }
+
+    // ========== Feature 3: Drag & Drop files ==========
+    var composerWrapEl = $("composerWrap");
+    var dragCounter = 0;
+    if (composerWrapEl && dropOverlay) {
+        composerWrapEl.addEventListener("dragenter", function (e) {
+            e.preventDefault();
+            dragCounter++;
+            dropOverlay.classList.add("visible");
+        });
+        composerWrapEl.addEventListener("dragleave", function (e) {
+            e.preventDefault();
+            dragCounter--;
+            if (dragCounter <= 0) {
+                dragCounter = 0;
+                dropOverlay.classList.remove("visible");
+            }
+        });
+        composerWrapEl.addEventListener("dragover", function (e) {
+            e.preventDefault();
+        });
+        composerWrapEl.addEventListener("drop", function (e) {
+            e.preventDefault();
+            dragCounter = 0;
+            dropOverlay.classList.remove("visible");
+            var files = e.dataTransfer && e.dataTransfer.files;
+            if (!files || !files.length) return;
+            for (var i = 0; i < files.length; i++) {
+                var f = files[i];
+                addDroppedFile(f);
+            }
+        });
+    }
+    function addDroppedFile(f) {
+        var reader = new FileReader();
+        if (f.type && f.type.startsWith("image/")) {
+            reader.onload = function () {
+                var base64 = reader.result;
+                attachedFiles.push({ name: f.name, path: null, content: base64, isImage: true });
+                renderAttachedFiles();
+            };
+            reader.readAsDataURL(f);
+        } else {
+            reader.onload = function () {
+                attachedFiles.push({ name: f.name, path: null, content: reader.result, isImage: false });
+                renderAttachedFiles();
+            };
+            reader.readAsText(f);
+        }
+    }
+    function renderAttachedFiles() {
+        if (!attachedFilesEl) return;
+        attachedFilesEl.innerHTML = "";
+        attachedFiles.forEach(function (af, idx) {
+            var chip = el("div", "attached-file", attachedFilesEl);
+            var icon = af.isImage ? "🖼" : "📄";
+            chip.innerHTML = '<span>' + icon + '</span><span class="af-name">' + escapeHtml(af.name) + '</span>';
+            var removeBtn = el("button", "af-remove", chip);
+            removeBtn.textContent = "×";
+            removeBtn.addEventListener("click", function () {
+                attachedFiles.splice(idx, 1);
+                renderAttachedFiles();
+            });
+        });
+    }
+
+    // ========== Feature 4: Multi-file diff (Apply All / Reject All) ==========
+    function trackPendingEdit(id) {
+        if (!pendingEditIds.includes(id)) pendingEditIds.push(id);
+        updateMultiDiffBar();
+        updateApplyAllButtons();
+    }
+    function removePendingEdit(id) {
+        pendingEditIds = pendingEditIds.filter(function(x) { return x !== id; });
+        updateMultiDiffBar();
+        updateApplyAllButtons();
+    }
+    function updateApplyAllButtons() {
+        // Remove old Apply All buttons
+        logBody.querySelectorAll(".apply-all-cascade").forEach(function(b) { b.remove(); });
+        if (pendingEditIds.length < 2) return;
+        // Find the last pending edit block
+        var lastId = pendingEditIds[pendingEditIds.length - 1];
+        var lastBlock = toolBlocks.get(lastId);
+        if (!lastBlock) return;
+        var actions = lastBlock.querySelector(".tool-actions");
+        if (!actions) return;
+        var allBtn = el("button", "btn primary small apply-all-cascade", actions);
+        allBtn.textContent = "Apply All (" + pendingEditIds.length + ")";
+        allBtn.addEventListener("click", function() {
+            // Apply from oldest to this one
+            var idsToApply = pendingEditIds.slice();
+            allBtn.disabled = true;
+            allBtn.textContent = "Applying…";
+            vscode.postMessage({ type: "applyAllEdits", ids: idsToApply });
+        });
+    }
+
+    function updateMultiDiffBar() {
+        var existing = logBody.querySelector(".multi-diff-bar");
+        if (pendingEditIds.length < 2) {
+            if (existing) existing.remove();
+            return;
+        }
+        if (!existing) {
+            existing = el("div", "multi-diff-bar", logBody);
+        }
+        existing.innerHTML =
+            '<span class="mdb-label">' + pendingEditIds.length + ' pending edits</span>' +
+            '<div class="mdb-actions">' +
+            '<button class="btn primary small" id="applyAllBtn">Apply All</button>' +
+            '<button class="btn ghost small" id="rejectAllBtn">Reject All</button>' +
+            '</div>';
+        existing.querySelector("#applyAllBtn").addEventListener("click", function () {
+            vscode.postMessage({ type: "applyAllEdits", ids: pendingEditIds.slice() });
+            pendingEditIds = [];
+            updateMultiDiffBar();
+        });
+        existing.querySelector("#rejectAllBtn").addEventListener("click", function () {
+            vscode.postMessage({ type: "rejectAllEdits", ids: pendingEditIds.slice() });
+            pendingEditIds = [];
+            updateMultiDiffBar();
+        });
+    }
+
+    // ========== Feature 5: Undo last agent action ==========
+    function showUndoBar(id, path) {
+        var existing = logBody.querySelector(".undo-bar");
+        if (existing) existing.remove();
+        var bar = el("div", "undo-bar", logBody);
+        bar.dataset.id = id;
+        bar.innerHTML = '<span>Applied: ' + escapeHtml(path || "file") + '</span>';
+        var undoBtn = el("button", "undo-btn", bar);
+        undoBtn.textContent = "Undo";
+        undoBtn.addEventListener("click", function () {
+            undoBtn.disabled = true;
+            undoBtn.textContent = "Undoing…";
+            vscode.postMessage({ type: "undoLastEdit", id: id });
+        });
+        scrollToBottom();
+    }
+
+    // ========== Feature 6: Export chat ==========
+    if (exportBtn && exportMenu) {
+        exportBtn.addEventListener("click", function (e) {
+            e.stopPropagation();
+            exportMenu.classList.toggle("visible");
+        });
+        document.addEventListener("click", function () {
+            exportMenu.classList.remove("visible");
+        });
+        exportMenu.querySelectorAll(".export-menu-item").forEach(function (btn) {
+            btn.addEventListener("click", function (e) {
+                e.stopPropagation();
+                var format = btn.dataset.format;
+                vscode.postMessage({ type: "exportChat", format: format });
+                exportMenu.classList.remove("visible");
+            });
+        });
+    }
+
+    // ========== Tool Grouping: collapse completed tools ==========
+    function groupCompletedTools() {
+        // Don't re-group if already grouped
+        if (logBody.querySelector(".tool-group-collapsed")) return;
+        var allChildren = Array.from(logBody.children);
+        var consecutive = [];
+        function flush() {
+            if (consecutive.length >= 3) collapseGroup(consecutive.slice());
+            consecutive = [];
+        }
+        for (var i = 0; i < allChildren.length; i++) {
+            var node = allChildren[i];
+            if (node.classList && node.classList.contains("tool-block")) {
+                var hasCheck = node.querySelector(".tcheck");
+                var isEditPending = node.querySelector(".tool-actions .btn.primary");
+                if (hasCheck && !isEditPending) {
+                    consecutive.push(node);
+                    continue;
+                }
+            }
+            flush();
+        }
+        flush();
+    }
+    function collapseGroup(blocks) {
+        var header = document.createElement("div");
+        header.className = "tool-group-collapsed";
+        var names = {};
+        blocks.forEach(function(b) {
+            var n = b.querySelector(".tname");
+            if (n) names[n.textContent] = (names[n.textContent] || 0) + 1;
+        });
+        var summary = Object.entries(names).map(function(e) { return e[1] + "x " + e[0]; }).join(", ");
+        header.innerHTML = '<span class="tgc-icon">\u2713</span>' +
+            '<span>' + blocks.length + ' tools (' + summary + ')</span>' +
+            '<span class="tgc-arrow">\u25B6</span>';
+        var container = document.createElement("div");
+        container.className = "tool-group-expanded";
+        var first = blocks[0];
+        first.parentNode.insertBefore(header, first);
+        first.parentNode.insertBefore(container, header.nextSibling);
+        blocks.forEach(function(b) { container.appendChild(b); });
+        header.addEventListener("click", function() {
+            header.classList.toggle("open");
+        });
+    }
+
+    // ========== Context Pins ==========
+    var contextPinsEl = $("contextPins");
+    var contextPins = []; // { path, content }
+    function addContextPin(path, content) {
+        if (contextPins.some(function(p) { return p.path === path; })) return;
+        contextPins.push({ path: path, content: content || "" });
+        renderContextPins();
+    }
+    function removeContextPin(path) {
+        contextPins = contextPins.filter(function(p) { return p.path !== path; });
+        renderContextPins();
+    }
+    function renderContextPins() {
+        if (!contextPinsEl) return;
+        contextPinsEl.innerHTML = "";
+        contextPins.forEach(function(pin) {
+            var chip = el("div", "pin-chip", contextPinsEl);
+            chip.innerHTML = '<span class="pin-icon">\ud83d\udccc</span><span>' + escapeHtml(pin.path.split('/').pop() || pin.path) + '</span>';
+            chip.title = pin.path;
+            var rm = el("button", "pin-remove", chip);
+            rm.textContent = "\u00d7";
+            rm.addEventListener("click", function() { removeContextPin(pin.path); });
+        });
+    }
+
+    // ========== Image preview in attachments ==========
+    var _origRenderAttached = renderAttachedFiles;
+    renderAttachedFiles = function() {
+        if (!attachedFilesEl) return;
+        attachedFilesEl.innerHTML = "";
+        attachedFiles.forEach(function (af, idx) {
+            var chip = el("div", "attached-file" + (af.isImage ? " is-image" : ""), attachedFilesEl);
+            if (af.isImage && af.content) {
+                var img = document.createElement("img");
+                img.className = "af-preview";
+                img.src = af.content;
+                chip.appendChild(img);
+            }
+            var nameSpan = el("span", "af-name", chip);
+            nameSpan.textContent = af.name;
+            var removeBtn = el("button", "af-remove", chip);
+            removeBtn.textContent = "\u00d7";
+            removeBtn.addEventListener("click", function () {
+                attachedFiles.splice(idx, 1);
+                renderAttachedFiles();
+            });
+        });
+    };
+
+    // Auto-group tools when streaming ends
+    var _origDoneHandler = null;
+    // We hook into the done case — after it finishes we group
+    // (done is already handled above, we call groupCompletedTools after)
 
     showSettings(false);
     showChatsPanel(false);

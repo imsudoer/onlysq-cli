@@ -43,6 +43,7 @@ interface StoredProposal extends ProposedChange {
     rightUri: vscode.Uri;
     title: string;
     exists: boolean;
+    originalContent: string;
 }
 
 const proposals = new Map<string, StoredProposal>();
@@ -76,6 +77,7 @@ export async function createProposal(
         rightUri,
         title: `OnlySq: ${exists ? "Edit" : "Create"} ${path.basename(rel)}`,
         exists,
+        originalContent: original,
     };
     proposals.set(change.id, stored);
     return stored;
@@ -103,7 +105,7 @@ export async function applyProposal(id: string): Promise<boolean> {
     const rel = p.path.replace(/^\/+/, "");
     await writeText(rel, p.newContent);
     p.state = "applied";
-    provider.set(p.leftUri, p.newContent);
+    // Don't overwrite leftUri — keep original content so View diff still shows before/after
     return true;
 }
 
@@ -119,4 +121,49 @@ export function getProposalState(id: string): ProposalState | "unknown" {
 
 export function getProposal(id: string): StoredProposal | undefined {
     return proposals.get(id);
+}
+
+export async function undoProposal(id: string): Promise<boolean> {
+    const p = proposals.get(id);
+    if (!p || p.state !== "applied") return false;
+    const rel = p.path.replace(/^\/+/, "");
+    if (p.exists) {
+        await writeText(rel, p.originalContent);
+    } else {
+        // file was created — delete it
+        try {
+            const uri = resolve(rel);
+            await vscode.workspace.fs.delete(uri);
+        } catch { /* ignore */ }
+    }
+    p.state = "pending";
+    provider.set(p.leftUri, p.originalContent);
+    return true;
+}
+
+export function getAllPendingIds(): string[] {
+    const ids: string[] = [];
+    for (const [id, p] of proposals) {
+        if (p.state === "pending") ids.push(id);
+    }
+    return ids;
+}
+
+export function hasPendingEdits(): boolean {
+    for (const [, p] of proposals) {
+        if (p.state === "pending") return true;
+    }
+    return false;
+}
+
+export function waitForPendingEdits(signal?: AbortSignal): Promise<void> {
+    return new Promise((resolve) => {
+        if (!hasPendingEdits()) { resolve(); return; }
+        const interval = setInterval(() => {
+            if (!hasPendingEdits() || signal?.aborted) {
+                clearInterval(interval);
+                resolve();
+            }
+        }, 200);
+    });
 }

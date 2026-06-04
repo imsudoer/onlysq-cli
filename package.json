@@ -2,7 +2,7 @@
     "name": "onlysq-cli",
     "displayName": "OnlySq CLI",
     "description": "AI coding assistant by OnlySq — inline completions, chat, and agent mode with native diff previews",
-    "version": "0.1.7",
+    "version": "0.2.22-beta",
     "publisher": "subashev",
     "repository": {
         "type": "git",
@@ -117,7 +117,8 @@
                     "type": "webview",
                     "id": "onlysq.chat",
                     "name": "",
-                    "contextualTitle": "OnlySq"
+                    "contextualTitle": "OnlySq",
+                    "icon": "media/icon-mono.svg"
                 }
             ]
         },
@@ -210,55 +211,30 @@
                     "default": true,
                     "description": "Persist chat history between VS Code sessions."
                 },
-                "onlysq.approval.write": {
-                    "type": "string",
-                    "enum": [
-                        "always",
-                        "ask",
-                        "never"
-                    ],
-                    "default": "ask",
-                    "description": "Approval for file writes (propose_edit, patch_file, apply_at_line)."
+                "onlysq.agent.toolPolicy": {
+                    "type": "object",
+                    "default": {},
+                    "markdownDescription": "Per-tool approval policy. Key = tool name, value = `always` / `ask` / `never` / `disabled`. Unset tools use defaults (read-only = always, write/shell/web = ask).",
+                    "additionalProperties": {
+                        "type": "string",
+                        "enum": [
+                            "always",
+                            "ask",
+                            "never",
+                            "disabled"
+                        ]
+                    }
                 },
-                "onlysq.approval.delete": {
+                "onlysq.agent.customSystemPrompt": {
                     "type": "string",
-                    "enum": [
-                        "always",
-                        "ask",
-                        "never"
-                    ],
-                    "default": "ask",
-                    "description": "Approval for file deletions."
+                    "default": "",
+                    "editPresentation": "multilineText",
+                    "description": "Custom instructions appended to the agent system prompt."
                 },
-                "onlysq.approval.rename": {
-                    "type": "string",
-                    "enum": [
-                        "always",
-                        "ask",
-                        "never"
-                    ],
-                    "default": "ask",
-                    "description": "Approval for file renames."
-                },
-                "onlysq.approval.shell": {
-                    "type": "string",
-                    "enum": [
-                        "always",
-                        "ask",
-                        "never"
-                    ],
-                    "default": "ask",
-                    "description": "Approval for shell / task execution."
-                },
-                "onlysq.approval.vscodeCommand": {
-                    "type": "string",
-                    "enum": [
-                        "always",
-                        "ask",
-                        "never"
-                    ],
-                    "default": "ask",
-                    "description": "Approval for arbitrary VS Code commands."
+                "onlysq.agent.personalization": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Let the agent learn your preferences from conversations."
                 }
             }
         }

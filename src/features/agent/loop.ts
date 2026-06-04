@@ -10,13 +10,25 @@ import {
     projectContextPath,
     truncateForPrompt,
 } from "../../services/workspace/projectContext";
+import { SUBAGENTS } from "./subagentDefs";
 
 export type AgentEvent =
     | { type: "token"; text: string }
     | { type: "tool-call"; id: string; name: string; args: any }
+    | { type: "tool-call-partial"; id: string; name: string; argsPartial: string }
     | { type: "tool-result"; id: string; name: string; result: string }
+    | { type: "ask-user"; id: string; question: string; options?: string[]; multiSelect: boolean }
+    | { type: "pause"; reason?: string }
+    | { type: "step"; step: number; maxSteps: number }
     | { type: "done"; reason?: string }
     | { type: "error"; message: string };
+
+export interface AgentControl {
+    shouldPause: () => boolean;
+    waitIfPaused: (reason?: string) => Promise<void>;
+    askUser?: (callId: string) => Promise<string>;
+    getLiveMessages?: () => ChatMessage[];
+}
 
 const SYSTEM_BASE = `You are OnlySq CLI, an autonomous coding agent operating inside VS Code.
     You have access to the user's workspace through tools. Workflow:
@@ -38,12 +50,32 @@ const SYSTEM_BASE = `You are OnlySq CLI, an autonomous coding agent operating in
     6. After making one edit, the file content has shifted. Re-read before any further apply_at_line on the same file.
     7. You may request multiple read-only tools in one step — they run in parallel.
     8. Stop and summarize when the goal is complete.
-    9. Do not redact technical identifiers (usernames, IPs, emails). Preserve verbatim.
+    9. If you need the user to review before continuing, call pause_agent with a clear reason.
+    10. If you need clarification, confirmation, or a choice from the user, call ask_user. Provide options when applicable.
+    11. Do not redact technical identifiers (usernames, IPs, emails). Preserve verbatim.
     
     Shell commands:
     - run_command — captures stdout/stderr.
     - run_command_interactive — fire-and-forget into terminal.
     - Respect the user's shell. Do NOT chain commands with operators the shell doesn't support.
+    
+    12. For complex tasks, use delegate() to hand off well-defined subtasks to specialized sub-agents:
+    - code_reviewer: find bugs and security issues (read-only)
+    - code_writer: implement changes
+    - test_runner: run and fix tests
+    - explorer: understand codebase structure (read-only)
+    - shell_operator: system/DevOps tasks
+    - refactorer: restructure code preserving behavior
+    - doc_writer: write documentation
+    - planner: break complex goals into steps (read-only)
+    Sub-agents work in isolation — include all necessary context in the goal.
+    
+    13. For complex goals, use create_task to break work into trackable steps.
+    - Create tasks BEFORE starting complex work (3+ files or multi-step changes).
+    - Update each task to "in_progress" when you start it, "done" when finished.
+    - Delete tasks that become irrelevant.
+    - Use list_agent_tasks to review your plan if you lose track.
+    - This helps the user see your progress and understand your plan.
     
     Be concise. Don't dump file contents back at the user unless asked.`;
 
@@ -53,7 +85,9 @@ export async function runAgent(
     goal: string,
     onEvent: (e: AgentEvent) => void,
     signal?: AbortSignal,
-    history: ChatMessage[] = []
+    history: ChatMessage[] = [],
+    control?: AgentControl,
+    extraContext?: string,
 ): Promise<ChatMessage[]> {
     const cfg = settings();
     const cache = new ToolCache(cfg.toolCache);
@@ -69,19 +103,35 @@ export async function runAgent(
     } catch (e) {
         Logger.log("[agent] failed to read project context", e);
     }
+    if (cfg.customSystemPrompt) {
+        systemPrompt += `\n\n--- Custom instructions ---\n${cfg.customSystemPrompt}`;
+    }
+    if (cfg.personalization) {
+        systemPrompt += `\n\n--- Personalization ---\nLearn the user's preferences, coding style, and patterns from this conversation. Adapt your responses accordingly. Remember what they like and dislike.`;
+    }
+    if (extraContext) {
+        systemPrompt += extraContext;
+    }
 
     const messages: ChatMessage[] = [
         { role: "system", content: systemPrompt },
         ...history,
         { role: "user", content: goal },
     ];
-    const tools = registry.list();
+    const tools = registry.list().filter(t => cfg.toolPolicy[t.function.name] !== "disabled");
 
     Logger.log(
         `[agent] starting run, history=${history.length}, tools=${tools.length}, max_steps=${cfg.maxAgentSteps}`
     );
 
     for (let step = 0; step < cfg.maxAgentSteps; step++) {
+        onEvent({ type: "step", step: step + 1, maxSteps: cfg.maxAgentSteps });
+        if (control?.shouldPause()) {
+            Logger.log("[agent] pause before next step");
+            onEvent({ type: "pause", reason: "Paused before next step" });
+            await control.waitIfPaused("Paused before next step");
+        }
+
         if (signal?.aborted) {
             Logger.log("[agent] aborted by signal");
             onEvent({ type: "done", reason: "cancelled" });
@@ -113,7 +163,20 @@ export async function runAgent(
                     content += d.content;
                     onEvent({ type: "token", text: d.content });
                 }
-                if (d.toolCalls) toolCalls = d.toolCalls;
+                if (d.toolCalls) {
+                    toolCalls = d.toolCalls;
+                    // Emit partial tool preview for live display
+                    for (const tc of toolCalls) {
+                        if (tc.id && tc.function?.name) {
+                            onEvent({
+                                type: "tool-call-partial",
+                                id: tc.id,
+                                name: tc.function.name,
+                                argsPartial: tc.function.arguments || "",
+                            });
+                        }
+                    }
+                }
                 if (d.finishReason) finishReason = d.finishReason;
             }
         } catch (e: any) {
@@ -201,6 +264,34 @@ export async function runAgent(
                 result = `Error: ${e?.message ?? e}`;
                 Logger.error(`[agent] tool ${tc.function.name} threw`, e);
             }
+
+            if (result === "__ASK_USER__" && tc.function.name === "ask_user" && control?.askUser) {
+                onEvent({
+                    type: "ask-user",
+                    id: tc.id,
+                    question: String(args.question ?? ""),
+                    options: Array.isArray(args.options) ? args.options.map(String) : undefined,
+                    multiSelect: !!args.multi_select,
+                });
+                result = await control.askUser(tc.id);
+                Logger.log(`[agent] ask_user answer: ${result.slice(0, 200)}`);
+            }
+
+            if (result.startsWith("__DELEGATE__:") && tc.function.name === "delegate") {
+                const parts = result.slice("__DELEGATE__:".length);
+                const colonIdx = parts.indexOf(":");
+                const agentName = parts.slice(0, colonIdx);
+                const delegateGoal = parts.slice(colonIdx + 1);
+                const subDef = SUBAGENTS[agentName];
+                if (!subDef) {
+                    result = `Error: unknown sub-agent "${agentName}"`;
+                } else {
+                    Logger.log(`[agent] delegating to ${agentName}: ${delegateGoal.slice(0, 200)}`);
+                    const { runSubAgent } = await import("./subagent");
+                    result = await runSubAgent(subDef, client, registry, delegateGoal, onEvent, signal, control);
+                }
+            }
+
             Logger.log(
                 `[agent] <- ${tc.function.name} result (${
                     result.length
@@ -226,6 +317,32 @@ export async function runAgent(
                 tool_call_id: r.id,
                 content: r.result.slice(0, 60_000),
             });
+        }
+
+        const pauseRequested = results.some((r) => r.name === "pause_agent");
+        if (pauseRequested || control?.shouldPause()) {
+            const reason = pauseRequested
+                ? results.find((r) => r.name === "pause_agent")?.result
+                : "Paused before next step";
+            Logger.log("[agent] pause after tools", reason);
+            onEvent({ type: "pause", reason });
+            await control?.waitIfPaused(reason);
+        }
+
+        if (signal?.aborted) {
+            onEvent({ type: "done", reason: "cancelled" });
+            return messages;
+        }
+
+        // Inject live messages from user sent during agent run
+        if (control?.getLiveMessages) {
+            const live = control.getLiveMessages();
+            if (live.length) {
+                Logger.log(`[agent] injecting ${live.length} live message(s)`);
+                for (const lm of live) {
+                    messages.push(lm);
+                }
+            }
         }
     }
 

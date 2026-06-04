@@ -9,6 +9,12 @@ AI coding assistant powered by OnlySq.
 -   **Inline completions** in any language
 -   **Token usage** tracking in status bar
 -   **Multi-tool support**: read/write files, run commands, git, tasks, search, diagnostics
+-   **@-mentions** — type `@filename` to attach workspace files as context
+-   **Drag & drop** files and images into the chat
+-   **Apply All / Reject All** — batch manage multiple pending file edits
+-   **Undo** — revert the last applied file edit with one click
+-   **Export** — save any chat as Markdown or JSON
+-   **Code blocks** with syntax highlighting, language label, and copy button
 
 ## Quick start
 
