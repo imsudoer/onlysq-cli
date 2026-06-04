@@ -2,7 +2,7 @@
     "name": "onlysq-cli",
     "displayName": "OnlySq CLI",
     "description": "AI coding assistant by OnlySq — inline completions, chat, and agent mode with native diff previews",
-    "version": "0.2.232",
+    "version": "0.2.234",
     "publisher": "subashev",
     "repository": {
         "type": "git",
@@ -103,17 +103,17 @@
             },
             {
                 "command": "onlysq.mcp.reload",
-                "title": "MCP \u2014 Reload Servers",
+                "title": "MCP — Reload Servers",
                 "category": "OnlySq"
             },
             {
                 "command": "onlysq.mcp.editConfig",
-                "title": "MCP \u2014 Edit Config",
+                "title": "MCP — Edit Config",
                 "category": "OnlySq"
             },
             {
                 "command": "onlysq.mcp.status",
-                "title": "MCP \u2014 Status",
+                "title": "MCP — Status",
                 "category": "OnlySq"
             }
         ],

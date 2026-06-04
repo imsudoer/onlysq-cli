@@ -1336,6 +1336,7 @@ button.icon-btn.on {
 .tasks-btn {
     position: relative;
 }
+.tasks-btn:hover svg { stroke: var(--accent); }
 .tasks-badge {
     position: absolute;
     top: 0;
@@ -1359,9 +1360,9 @@ button.icon-btn.on {
     width: calc(100% - 12px);
     max-height: 70%;
     background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+    border: 1px solid rgba(253, 107, 3, 0.35);
+    border-radius: 8px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(253, 107, 3, 0.05);
     z-index: 50;
     display: none;
     flex-direction: column;
@@ -1374,8 +1375,9 @@ button.icon-btn.on {
     display: flex;
     align-items: center;
     gap: 6px;
-    padding: 6px 8px;
+    padding: 7px 10px;
     border-bottom: 1px solid var(--border-soft);
+    background: linear-gradient(180deg, rgba(253, 107, 3, 0.10) 0%, transparent 100%);
 }
 .tasks-title {
     flex: 1;
@@ -1383,7 +1385,7 @@ button.icon-btn.on {
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.6px;
-    color: var(--muted);
+    color: var(--accent);
 }
 .tasks-body {
     flex: 1;
