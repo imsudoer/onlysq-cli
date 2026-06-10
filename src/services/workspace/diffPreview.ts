@@ -156,11 +156,32 @@ export function hasPendingEdits(): boolean {
     return false;
 }
 
-export function waitForPendingEdits(signal?: AbortSignal): Promise<void> {
+export function listPendingEdits(): Array<{ id: string; path: string }> {
+    const out: Array<{ id: string; path: string }> = [];
+    for (const [id, p] of proposals) {
+        if (p.state === "pending") out.push({ id, path: p.path });
+    }
+    return out;
+}
+
+export function abandonPendingEdits(): string[] {
+    const abandoned: string[] = [];
+    for (const [id, p] of proposals) {
+        if (p.state === "pending") {
+            p.state = "rejected";
+            abandoned.push(id);
+        }
+    }
+    return abandoned;
+}
+
+export function waitForPendingEdits(signal?: AbortSignal, timeoutMs = 120_000): Promise<void> {
     return new Promise((resolve) => {
         if (!hasPendingEdits()) { resolve(); return; }
+        const startedAt = Date.now();
         const interval = setInterval(() => {
-            if (!hasPendingEdits() || signal?.aborted) {
+            const timedOut = Date.now() - startedAt > timeoutMs;
+            if (!hasPendingEdits() || signal?.aborted || timedOut) {
                 clearInterval(interval);
                 resolve();
             }

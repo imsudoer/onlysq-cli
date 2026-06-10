@@ -18,14 +18,43 @@ export class OpenAIClient {
             } tools=${req.tools?.length ?? 0}`
         );
 
+        try {
+            const approxPromptText = JSON.stringify(req.messages) + (req.tools ? JSON.stringify(req.tools) : "");
+            this.usage?.previewAddPrompt(approxPromptText);
+        } catch {}
+
         let key = await this.auth.getApiKey();
-        let resp = await this.send(key, req, signal);
-        if (resp.status === 401) {
-            Logger.log("[ai] 401, refreshing api key");
-            key = await this.auth.getApiKey(true);
-            resp = await this.send(key, req, signal);
+        let resp: Response | undefined;
+        let lastErr: any;
+        const MAX_ATTEMPTS = 3;
+        const RETRY_DELAY = 5000;
+        for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            try {
+                resp = await this.send(key, req, signal);
+                if (resp.status === 401 && attempt === 1) {
+                    Logger.log("[ai] 401, refreshing api key");
+                    key = await this.auth.getApiKey(true);
+                    resp = await this.send(key, req, signal);
+                }
+                Logger.log(`[ai] response status=${resp.status} ok=${resp.ok} (attempt ${attempt}/${MAX_ATTEMPTS})`);
+                if (resp.ok) break;
+                if (resp.status < 500 && resp.status !== 429) break;
+                if (attempt < MAX_ATTEMPTS) {
+                    Logger.log(`[ai] retryable ${resp.status}, waiting ${RETRY_DELAY}ms before retry`);
+                    try { await sleepWithSignal(RETRY_DELAY, signal); } catch { throw new Error("cancelled"); }
+                }
+            } catch (e: any) {
+                lastErr = e;
+                if (signal?.aborted || /aborted|cancelled/i.test(String(e?.message))) throw e;
+                Logger.log(`[ai] fetch threw on attempt ${attempt}/${MAX_ATTEMPTS}: ${e?.message ?? e}`);
+                if (attempt < MAX_ATTEMPTS) {
+                    try { await sleepWithSignal(RETRY_DELAY, signal); } catch { throw new Error("cancelled"); }
+                } else {
+                    throw e;
+                }
+            }
         }
-        Logger.log(`[ai] response status=${resp.status} ok=${resp.ok}`);
+        if (!resp) throw lastErr ?? new Error("Chat failed: no response");
 
         if (!resp.ok || !resp.body) {
             const text = await resp.text();
@@ -110,11 +139,15 @@ export class OpenAIClient {
             if (delta.content) {
                 out.content = delta.content;
                 contentBytes += delta.content.length;
+                this.usage?.previewAddCompletion(delta.content);
             }
             if (delta.tool_calls) {
                 out.toolCalls = mergeToolCalls(acc, delta.tool_calls);
-                for (const tc of delta.tool_calls)
-                    toolBytes += tc?.function?.arguments?.length ?? 0;
+                for (const tc of delta.tool_calls) {
+                    const argLen = tc?.function?.arguments?.length ?? 0;
+                    toolBytes += argLen;
+                    if (argLen) this.usage?.previewAddCompletion(tc.function.arguments);
+                }
             }
             if (choice.finish_reason) {
                 out.finishReason = choice.finish_reason;
@@ -157,6 +190,18 @@ export class OpenAIClient {
             signal,
         });
     }
+}
+
+function sleepWithSignal(ms: number, signal?: AbortSignal): Promise<void> {
+    return new Promise((resolve, reject) => {
+        if (signal?.aborted) { reject(new Error("aborted")); return; }
+        const t = setTimeout(() => {
+            if (signal) signal.removeEventListener("abort", onAbort);
+            resolve();
+        }, ms);
+        function onAbort() { clearTimeout(t); reject(new Error("aborted")); }
+        if (signal) signal.addEventListener("abort", onAbort, { once: true });
+    });
 }
 
 function mergeToolCalls(

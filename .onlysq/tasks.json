@@ -1,5 +1,5 @@
 {
-  "counter": 14,
+  "counter": 28,
   "tasks": [
     {
       "id": "task-1",
@@ -69,6 +69,76 @@
     {
       "id": "task-14",
       "text": "Cancel button: довести до конца — интеграция в shell + terminal тулы + UI кнопка",
+      "status": "done"
+    },
+    {
+      "id": "task-15",
+      "text": "Limit chat to N messages (virtualized window) + smooth scroll-load instead of Load more button",
+      "status": "done"
+    },
+    {
+      "id": "task-16",
+      "text": "Persist chat messages: user msg → save immediately, agent reply → save on finish",
+      "status": "done"
+    },
+    {
+      "id": "task-17",
+      "text": "Fix Regenerate button reliability + edit→resend always triggers agent",
+      "status": "done"
+    },
+    {
+      "id": "task-18",
+      "text": "OpenAIClient: retry up to 3 attempts with 5s delay on server errors",
+      "status": "done"
+    },
+    {
+      "id": "task-19",
+      "text": "Investigate CPU/RAM usage — profile what's heavy and optimize",
+      "status": "done"
+    },
+    {
+      "id": "task-20",
+      "text": "Fix PowerShell $ eaten in terminal write — literal $ should survive REPL",
+      "status": "done"
+    },
+    {
+      "id": "task-21",
+      "text": "Fix tool freeze: cancel button must work even on hung tools — global timeout per tool + force-cancel path",
+      "status": "done"
+    },
+    {
+      "id": "task-22",
+      "text": "Глобальная память (cross-project): хранить в globalStorageUri/global-memory.json, отдельный namespace. Тулы add_global_memory/get_global_memory/view_global_memories/delete_global_memory. Инжектить в системный промпт.",
+      "status": "done"
+    },
+    {
+      "id": "task-23",
+      "text": "Системный промпт: усилить требование пользоваться тасками и memory (IP серверов, креды-плейсхолдеры, пути, окружения, версии). Поправить правило «сообщения юзера в процессе» — не сбрасывать список задач, продолжать с того же места.",
+      "status": "done"
+    },
+    {
+      "id": "task-24",
+      "text": "Parallel tool calls: разрешить модели возвращать несколько tool_calls за один ответ и выполнять их параллельно (read-only) или последовательно (write). Promise.all для read-only, последовательно для write/shell. Обновить системный промпт.",
+      "status": "done"
+    },
+    {
+      "id": "task-25",
+      "text": "Картинки: Ctrl+V и drag&drop в чат → загрузка в виде base64. Хранить attachments в сообщении user. Передавать модели как content parts (image_url с data:base64).",
+      "status": "done"
+    },
+    {
+      "id": "task-26",
+      "text": "Тул read_image: прочитать локальный/URL файл картинки, вернуть в content как image_url. Тул screenshot_url: через puppeteer/playwright headless снять скрин сайта с width/height/wait, вернуть как image.",
+      "status": "done"
+    },
+    {
+      "id": "task-27",
+      "text": "DOM лимит = 20 сообщений (был 80), плюс плавная подгрузка сверху осталась как есть.",
+      "status": "done"
+    },
+    {
+      "id": "task-28",
+      "text": "Счётчик токенов: считать на каждый step (после каждого assistant message / tool result), а не только в конце. Передавать в UI через step-токены событие, обновлять live в плашке.",
       "status": "done"
     }
   ]

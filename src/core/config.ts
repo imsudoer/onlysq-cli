@@ -50,6 +50,7 @@ export const TOOL_DEFAULTS: Record<string, ToolPolicy> = {
     list_tasks: "always", git_status: "always", git_diff: "always",
     workspace_info: "always", system_info: "always", delegate: "always",
     add_memory: "always", get_memory: "always", view_memories: "always", delete_memory: "always",
+    add_global_memory: "always", get_global_memory: "always", view_global_memories: "always", delete_global_memory: "always",
     create_task: "always", update_task: "always", delete_task: "always", list_agent_tasks: "always",
     read_project_context: "always", get_my_config: "always",
     // Write
@@ -62,6 +63,7 @@ export const TOOL_DEFAULTS: Record<string, ToolPolicy> = {
     terminal: "ask",
     // Web
     fetch_url: "ask", web_search: "ask", scrape_page: "ask",
+    read_image: "always", screenshot_url: "ask",
 };
 
 export interface Settings {

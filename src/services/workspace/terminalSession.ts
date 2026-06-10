@@ -213,10 +213,17 @@ export function openSession(opts: OpenSessionOpts = {}): TerminalSession {
     return session;
 }
 
-export function writeToSession(id: string, text: string): boolean {
+export function writeToSession(id: string, text: string, opts: { literal?: boolean } = {}): boolean {
     const s = sessions.get(id);
     if (!s || s.closed) return false;
-    const data = text.endsWith("\n") ? text : text + "\n";
+    let payload = text;
+    if (opts.literal) {
+        const sh = (s.shell || "").toLowerCase();
+        if (sh.includes("powershell") || sh.includes("pwsh")) {
+            payload = payload.replace(/`/g, "``").replace(/\$/g, "`$");
+        }
+    }
+    const data = payload.endsWith("\n") ? payload : payload + "\n";
     try {
         s.proc.stdin.write(data);
         return true;

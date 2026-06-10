@@ -45,8 +45,7 @@
     const modalBackdrop = $("modelModal");
     const modelSearch = $("modelSearch");
     const modelList = $("modelList");
-    const loadMoreWrap = $("loadMoreWrap");
-    const loadMoreBtn = $("loadMoreBtn");
+    const loadMoreSpinner = $("loadMoreSpinner");
     const chatHeader = $("chatHeader");
     const chatsBtn = $("chatsBtn");
     const chatsPanel = $("chatsPanel");
@@ -112,6 +111,8 @@
     let mode = "chat";
     let currentBody = null;
     let currentAcc = "";
+    let pendingFreshChars = 0;
+    let tokenFlushScheduled = false;
     let streaming = false;
     let signedIn = false;
     let currentModel = "";
@@ -270,6 +271,31 @@
     var thinkingRe = /<thinking>([\s\S]*?)<\/thinking>/gi;
 
     var MAX_FRESH_CHARS = 50;
+
+    function scheduleTokenFlush() {
+        if (tokenFlushScheduled) return;
+        tokenFlushScheduled = true;
+        requestAnimationFrame(flushTokens);
+    }
+
+    function flushTokens() {
+        tokenFlushScheduled = false;
+        if (!currentBody) return;
+        var added = pendingFreshChars;
+        pendingFreshChars = 0;
+        currentBody.innerHTML = renderMarkdown(currentAcc);
+        if (added > 0) {
+            wrapFreshTokens(currentBody, added);
+        }
+        var parentMsg = currentBody.closest(".msg");
+        if (parentMsg) {
+            parentMsg.dataset.raw = currentAcc;
+            parentMsg.classList.remove("new-msg");
+        }
+        currentBody.classList.add("cursor");
+        scrollToBottom();
+    }
+
     function wrapFreshTokens(root, freshLen) {
         if (!root || freshLen <= 0) return;
         var cap = Math.min(freshLen, MAX_FRESH_CHARS);
@@ -626,6 +652,8 @@
     }
 
     function visibleIndexOf(msgEl) {
+        // Все .msg включая скрытые виртуализацией — индекс в DOM-порядке соответствует
+        // порядку в which we received them from backend (after windowStart).
         const all = Array.from(logBody.querySelectorAll(".msg"));
         return all.indexOf(msgEl);
     }
@@ -648,7 +676,9 @@
     }
 
     function requestRegenerate(msgEl) {
-        if (streaming) return;
+        if (streaming) {
+            vscode.postMessage({ type: "cancel" });
+        }
         const idx = visibleIndexOf(msgEl);
         if (idx < 0) return;
         vscode.postMessage({ type: "regenerateAt", index: idx, mode });
@@ -697,6 +727,9 @@
             var next = ta.value;
             msgEl.classList.remove("editing");
             if (commit && next.trim()) {
+                if (streaming) {
+                    vscode.postMessage({ type: "cancel" });
+                }
                 var idx = visibleIndexOf(msgEl);
                 msgEl.dataset.raw = next;
                 body.innerHTML = renderMarkdown(next);
@@ -2735,19 +2768,19 @@
     }
 
     function updateLoadMoreVisibility() {
-        show(loadMoreWrap, !!canLoadMore);
+        if (loadMoreSpinner) loadMoreSpinner.style.display = (canLoadMore && isLoadingMore) ? "flex" : "none";
     }
 
-    if (loadMoreBtn) {
-        loadMoreBtn.addEventListener("click", () => {
-            if (!canLoadMore || isLoadingMore) return;
-            isLoadingMore = true;
-            loadMoreBtn.disabled = true;
-            loadMoreBtn.textContent = "Loading…";
-            vscode.postMessage({ type: "loadMore" });
-        });
+    function tryAutoLoadMore() {
+        if (!canLoadMore || isLoadingMore) return;
+        if (logEl.scrollTop > 60) return;
+        isLoadingMore = true;
+        updateLoadMoreVisibility();
+        vscode.postMessage({ type: "loadMore" });
     }
 
+    var scrollLoadDebounce;
+    var MAX_DOM_MSGS = 20;
     logEl.addEventListener("scroll", () => {
         const atBottom = isAtBottom();
 
@@ -2759,8 +2792,55 @@
             updateScrollBtn();
         }
 
+        clearTimeout(scrollLoadDebounce);
+        scrollLoadDebounce = setTimeout(() => {
+            if (streaming) return;
+            tryAutoLoadMore();
+            virtualizeDom();
+        }, 80);
+
         clearTimeout(scrollTrimDebounce);
     });
+
+    function virtualizeDom() {
+        if (streaming) return;
+        var msgs = logBody.querySelectorAll(".msg");
+        if (msgs.length <= MAX_DOM_MSGS) return;
+        var st = logEl.scrollTop;
+        var sh = logEl.scrollHeight;
+        var ch = logEl.clientHeight;
+        var nearTop = st < 200;
+        var nearBottom = (sh - st - ch) < 200;
+        if (nearTop && !nearBottom) {
+            for (var i = MAX_DOM_MSGS; i < msgs.length; i++) {
+                if (msgs[i].dataset && msgs[i].dataset.tempHidden !== "1") {
+                    msgs[i].dataset.tempHidden = "1";
+                    msgs[i].style.display = "none";
+                }
+            }
+        } else if (nearBottom && !nearTop) {
+            var extra = msgs.length - MAX_DOM_MSGS;
+            for (var j = 0; j < extra; j++) {
+                if (msgs[j].dataset && msgs[j].dataset.tempHidden !== "1") {
+                    msgs[j].dataset.tempHidden = "1";
+                    msgs[j].style.display = "none";
+                }
+            }
+            for (var k = extra; k < msgs.length; k++) {
+                if (msgs[k].dataset && msgs[k].dataset.tempHidden === "1") {
+                    msgs[k].dataset.tempHidden = "";
+                    msgs[k].style.display = "";
+                }
+            }
+        } else {
+            for (var n = 0; n < msgs.length; n++) {
+                if (msgs[n].dataset && msgs[n].dataset.tempHidden === "1") {
+                    msgs[n].dataset.tempHidden = "";
+                    msgs[n].style.display = "";
+                }
+            }
+        }
+    }
 
     window.addEventListener("message", (e) => {
         const m = e.data;
@@ -2779,19 +2859,9 @@
             case "token":
                 clearStatusPill();
                 if (!currentBody) startAssistantBody();
-                var addedLen = m.text ? m.text.length : 0;
-                currentAcc += m.text;
-                currentBody.innerHTML = renderMarkdown(currentAcc);
-                if (addedLen > 0) {
-                    wrapFreshTokens(currentBody, addedLen);
-                }
-                var parentMsg2 = currentBody.closest(".msg");
-                if (parentMsg2) {
-                    parentMsg2.dataset.raw = currentAcc;
-                    parentMsg2.classList.remove("new-msg");
-                }
-                currentBody.classList.add("cursor");
-                scrollToBottom();
+                currentAcc += (m.text || "");
+                pendingFreshChars += (m.text ? m.text.length : 0);
+                scheduleTokenFlush();
                 break;
             case "tool-call-partial":
                 // Show ghost/streaming tool preview
@@ -2920,8 +2990,7 @@
                     logEl.scrollTop = prevTop + delta;
                 }
                 isLoadingMore = false;
-                loadMoreBtn.disabled = false;
-                loadMoreBtn.textContent = "Load previous messages";
+                updateLoadMoreVisibility();
                 break;
             case "trimTo":
                 if (streaming) break;
@@ -3432,6 +3501,31 @@
             reader.readAsText(f);
         }
     }
+
+    inp.addEventListener("paste", function (e) {
+        var items = e.clipboardData && e.clipboardData.items;
+        if (!items) return;
+        var handled = false;
+        for (var i = 0; i < items.length; i++) {
+            var it = items[i];
+            if (it.kind === "file") {
+                var f = it.getAsFile();
+                if (f && f.type && f.type.startsWith("image/")) {
+                    var name = f.name || ("pasted-" + Date.now() + ".png");
+                    var reader = new FileReader();
+                    reader.onload = function (nm) {
+                        return function () {
+                            attachedFiles.push({ name: nm, path: null, content: reader.result, isImage: true });
+                            renderAttachedFiles();
+                        };
+                    }(name);
+                    reader.readAsDataURL(f);
+                    handled = true;
+                }
+            }
+        }
+        if (handled) e.preventDefault();
+    });
     function renderAttachedFiles() {
         if (!attachedFilesEl) return;
         attachedFilesEl.innerHTML = "";

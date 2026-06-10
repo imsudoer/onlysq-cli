@@ -8,8 +8,9 @@ import { AuthService } from "./services/auth/authService";
 import { OpenAIClient } from "./services/llm/openaiClient";
 import { ModelsService } from "./services/llm/modelsService";
 import { ToolRegistry } from "./features/agent/toolRegistry";
-import { builtinTools, setMemoryStore, setSemanticSearcher, initAgentTasksStore } from "./features/agent/tools";
+import { builtinTools, setMemoryStore, setGlobalMemoryStore, setSemanticSearcher, initAgentTasksStore } from "./features/agent/tools";
 import { MemoryStore } from "./services/memory/memoryStore";
+import { GlobalMemoryStore } from "./services/memory/globalMemoryStore";
 import { EmbeddingsClient } from "./services/llm/embeddingsClient";
 import { WorkspaceIndexer } from "./services/index/indexer";
 import { SemanticSearcher } from "./services/index/searcher";
@@ -36,10 +37,12 @@ export async function activate(ctx: vscode.ExtensionContext) {
     const modelsService = new ModelsService(ctx, auth);
 
     const memory = new MemoryStore(ctx);
+    const globalMemory = new GlobalMemoryStore(ctx);
 
     const registry = new ToolRegistry();
     registry.registerAll(builtinTools);
     setMemoryStore(memory);
+    setGlobalMemoryStore(globalMemory);
     initAgentTasksStore(ctx.workspaceState);
 
     const mcp = new McpManager(registry);
@@ -77,7 +80,7 @@ export async function activate(ctx: vscode.ExtensionContext) {
 
     const usage = new UsageTracker(ctx);
     const client = new OpenAIClient(auth, usage);
-    const chat = new ChatView(ctx, client, registry, auth, modelsService, memory, mcp);
+    const chat = new ChatView(ctx, client, registry, auth, modelsService, memory, mcp, globalMemory);
 
     const status = new StatusBar(auth, usage);
 

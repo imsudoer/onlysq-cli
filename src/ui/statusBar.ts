@@ -58,14 +58,14 @@ export class StatusBar implements vscode.Disposable {
 
     private renderUsage(): void {
         const u = this.usage.current;
-        if (!u.requests) {
+        if (!u.requests && !u.totalTokens) {
             this.usage$.hide();
             return;
         }
         const human = formatTokens(u.totalTokens);
         this.usage$.text = `$(symbol-numeric) ${human}`;
         this.usage$.tooltip =
-            `Session usage\n` +
+            `Session usage (live)\n` +
             `Requests: ${u.requests}\n` +
             `Prompt: ${u.promptTokens.toLocaleString()}\n` +
             `Completion: ${u.completionTokens.toLocaleString()}\n` +

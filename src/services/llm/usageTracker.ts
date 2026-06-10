@@ -19,53 +19,54 @@ const EMPTY: UsageSnapshot = {
 
 export class UsageTracker {
     private snap: UsageSnapshot;
+    private preview = { prompt: 0, completion: 0 };
     private readonly _onChange = new vscode.EventEmitter<UsageSnapshot>();
     readonly onChange = this._onChange.event;
 
     constructor(private ctx: vscode.ExtensionContext) {
-        const stored = ctx.workspaceState.get<UsageSnapshot>(
-            STORAGE_KEYS.sessionUsage
-        );
-        this.snap =
-            stored && Date.now() - stored.sessionStartedAt < 24 * 3600_000
-                ? stored
-                : { ...EMPTY, sessionStartedAt: Date.now() };
+        const stored = ctx.workspaceState.get<UsageSnapshot>(STORAGE_KEYS.sessionUsage);
+        this.snap = stored && Date.now() - stored.sessionStartedAt < 24 * 3600_000
+            ? stored
+            : { ...EMPTY, sessionStartedAt: Date.now() };
     }
 
     get current(): UsageSnapshot {
-        return { ...this.snap };
+        return {
+            ...this.snap,
+            promptTokens: this.snap.promptTokens + this.preview.prompt,
+            completionTokens: this.snap.completionTokens + this.preview.completion,
+            totalTokens: this.snap.totalTokens + this.preview.prompt + this.preview.completion,
+        };
     }
 
-    record(
-        usage:
-            | {
-                  prompt_tokens?: number;
-                  completion_tokens?: number;
-                  total_tokens?: number;
-              }
-            | undefined
-            | null
-    ): void {
+    previewAddCompletion(text: string): void {
+        if (!text) return;
+        this.preview.completion += Math.max(1, Math.round(text.length / 4));
+        this._onChange.fire(this.current);
+    }
+
+    previewAddPrompt(text: string): void {
+        if (!text) return;
+        this.preview.prompt += Math.max(1, Math.round(text.length / 4));
+        this._onChange.fire(this.current);
+    }
+
+    record(usage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | undefined | null): void {
         if (!usage) return;
         this.snap.promptTokens += usage.prompt_tokens ?? 0;
         this.snap.completionTokens += usage.completion_tokens ?? 0;
-        this.snap.totalTokens +=
-            usage.total_tokens ??
-            (usage.prompt_tokens ?? 0) + (usage.completion_tokens ?? 0);
+        this.snap.totalTokens += usage.total_tokens ?? (usage.prompt_tokens ?? 0) + (usage.completion_tokens ?? 0);
         this.snap.requests++;
-        void this.ctx.workspaceState.update(
-            STORAGE_KEYS.sessionUsage,
-            this.snap
-        );
+        this.preview.prompt = 0;
+        this.preview.completion = 0;
+        void this.ctx.workspaceState.update(STORAGE_KEYS.sessionUsage, this.snap);
         this._onChange.fire(this.current);
     }
 
     reset(): void {
         this.snap = { ...EMPTY, sessionStartedAt: Date.now() };
-        void this.ctx.workspaceState.update(
-            STORAGE_KEYS.sessionUsage,
-            this.snap
-        );
+        this.preview = { prompt: 0, completion: 0 };
+        void this.ctx.workspaceState.update(STORAGE_KEYS.sessionUsage, this.snap);
         this._onChange.fire(this.current);
     }
 }

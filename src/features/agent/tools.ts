@@ -59,12 +59,19 @@ import {
 } from "../../services/workspace/projectContext";
 import { SUBAGENTS } from "./subagentDefs";
 import { fetchUrl, webSearch, scrapePage } from "../../services/workspace/web";
+import { takeScreenshot, fileToDataUrl, urlToDataUrl } from "../../services/workspace/screenshot";
 import type { MemoryStore } from "../../services/memory/memoryStore";
+import type { GlobalMemoryStore } from "../../services/memory/globalMemoryStore";
 import type { SemanticSearcher } from "../../services/index/searcher";
 
 let _memoryStore: MemoryStore | undefined;
 export function setMemoryStore(store: MemoryStore): void {
     _memoryStore = store;
+}
+
+let _globalMemory: GlobalMemoryStore | undefined;
+export function setGlobalMemoryStore(store: GlobalMemoryStore): void {
+    _globalMemory = store;
 }
 
 let _searcher: SemanticSearcher | undefined;
@@ -1214,6 +1221,7 @@ export const builtinTools: ToolHandler[] = [
                         cwd: str("Working directory (open action only, optional, relative to workspace)"),
                         text: str("Text/command to send to stdin (write action). Newline appended automatically."),
                         command: str("Alias for `text` (write action)"),
+                        literal: { type: "boolean", description: "Treat $ and ` as literal characters (escapes them for PowerShell). Default false. Use when sending text that contains $ which should NOT be interpreted as a variable." },
                         wait_ms: num("How long to wait before returning output, default 1000, max 30000 (read action only)"),
                         clear: { type: "boolean", description: "Clear buffer after read? Default true (read action only)" },
                         show: { type: "boolean", description: "Show the terminal panel after opening? Default true (open action only)" },
@@ -1247,8 +1255,8 @@ export const builtinTools: ToolHandler[] = [
                     if (!(await askToolApproval("terminal", `Send to ${a.id}: ${text.slice(0, 80)}`))) {
                         return "User denied terminal write";
                     }
-                    writeToSession(String(a.id), text);
-                    return `Wrote ${text.length} chars to ${a.id}`;
+                    writeToSession(String(a.id), text, { literal: !!a.literal });
+                    return `Wrote ${text.length} chars to ${a.id}${a.literal ? " (literal)" : ""}`;
                 }
                 if (action === "read") {
                     if (!a.id) return "Error: id is required for read";
@@ -1650,6 +1658,62 @@ export const builtinTools: ToolHandler[] = [
     },
 
     {
+        def: { type: "function", function: {
+            name: "read_image",
+            description: "Load an image (local file path or http(s) URL) and attach it to the conversation so you can see it on the next step. Use when the user attached an image you need to inspect, or you saved a screenshot somewhere.",
+            parameters: obj({ src: str("Local file path (workspace-relative or absolute) or http(s):// URL") }, ["src"]),
+        }},
+        run: async (a: any) => {
+            const src = String(a.src ?? "").trim();
+            if (!src) return "Error: src is required";
+            try {
+                let result: { dataUrl: string; bytes: number };
+                if (/^https?:\/\//i.test(src)) result = await urlToDataUrl(src);
+                else {
+                    const abs = resolve(src);
+                    result = fileToDataUrl(abs.fsPath);
+                }
+                const note = `Loaded image ${src} (${(result.bytes / 1024).toFixed(1)} KB). Image is attached for next step.`;
+                return `__TOOL_IMAGE__\n${JSON.stringify({ url: result.dataUrl, note })}`;
+            } catch (e: any) {
+                return `Error: ${e?.message ?? e}`;
+            }
+        },
+    },
+
+    {
+        def: { type: "function", function: {
+            name: "screenshot_url",
+            description: "Capture a screenshot of a website using a local headless Chrome/Chromium/Edge. Returns the image attached to the conversation. Requires Chrome/Chromium/Edge installed (or ONLYSQ_CHROME_PATH env var).",
+            parameters: obj({
+                url: str("Page URL"),
+                width: num("Viewport width in px, default 1280"),
+                height: num("Viewport height in px, default 800"),
+                wait_ms: num("How long to wait for page to render, ms, default 1500"),
+                full_page: { type: "boolean", description: "Capture full scrollable page (default false)" },
+            }, ["url"]),
+        }},
+        run: async (a: any) => {
+            if (!(await askToolApproval("screenshot_url", `Screenshot ${a.url}?`)))
+                return "User denied screenshot";
+            try {
+                const r = await takeScreenshot({
+                    url: String(a.url),
+                    width: a.width ? Number(a.width) : undefined,
+                    height: a.height ? Number(a.height) : undefined,
+                    waitMs: a.wait_ms ? Number(a.wait_ms) : undefined,
+                    fullPage: !!a.full_page,
+                });
+                const note = `Screenshot of ${a.url} (${(r.bytes / 1024).toFixed(1)} KB). Image is attached for next step.`;
+                return `__TOOL_IMAGE__\n${JSON.stringify({ url: r.dataUrl, note })}`;
+            } catch (e: any) {
+                return `Error: ${e?.message ?? e}`;
+            }
+        },
+    },
+
+
+    {
         def: {
             type: "function",
             function: {
@@ -1787,6 +1851,56 @@ export const builtinTools: ToolHandler[] = [
             if (!_memoryStore) return "Error: memory store not initialized";
             const ok = await _memoryStore.delete(String(a.key));
             return ok ? `Deleted: ${a.key}` : `Key "${a.key}" not found.`;
+        },
+    },
+
+    {
+        def: { type: "function", function: {
+            name: "add_global_memory",
+            description: "Store a cross-project (global) memory entry. Use for things that apply across ALL projects you work on with this user: their name, preferences, server IPs/hostnames they own, common credentials hints, what projects they have, frequently used tools, OS/env details, recurring decisions. NOT for project-specific stuff — that goes to add_memory.",
+            parameters: obj({ key: str("Short label"), value: str("Value to store") }, ["key", "value"]),
+        }},
+        run: async (a: any) => {
+            if (!_globalMemory) return "Error: global memory store not initialized";
+            await _globalMemory.set(String(a.key), String(a.value));
+            return `Stored globally: ${a.key} = ${String(a.value).slice(0, 100)}`;
+        },
+    },
+    {
+        def: { type: "function", function: {
+            name: "get_global_memory",
+            description: "Retrieve a value from global (cross-project) memory.",
+            parameters: obj({ key: str("Key to look up") }, ["key"]),
+        }},
+        run: async (a: any) => {
+            if (!_globalMemory) return "Error: global memory store not initialized";
+            const v = _globalMemory.get(String(a.key));
+            return v !== undefined ? `${a.key} = ${v}` : `Key "${a.key}" not found in global memory.`;
+        },
+    },
+    {
+        def: { type: "function", function: {
+            name: "view_global_memories",
+            description: "List global (cross-project) memories, optionally filtered.",
+            parameters: obj({ query: str("Optional search filter") }),
+        }},
+        run: async (a: any) => {
+            if (!_globalMemory) return "Error: global memory store not initialized";
+            const entries = a.query ? _globalMemory.search(String(a.query)) : _globalMemory.list();
+            if (!entries.length) return "(no global memories stored)";
+            return entries.map((e: any) => `${e.key}: ${e.value}`).join("\n");
+        },
+    },
+    {
+        def: { type: "function", function: {
+            name: "delete_global_memory",
+            description: "Delete a global memory entry by key.",
+            parameters: obj({ key: str("Key to delete") }, ["key"]),
+        }},
+        run: async (a: any) => {
+            if (!_globalMemory) return "Error: global memory store not initialized";
+            const ok = await _globalMemory.delete(String(a.key));
+            return ok ? `Deleted globally: ${a.key}` : `Key "${a.key}" not found in global memory.`;
         },
     },
 

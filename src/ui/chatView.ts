@@ -130,8 +130,8 @@ const CHAT_BODY = `
 </div>
 
 <main id="logEl" class="chat-log" style="display:none">
-  <div id="loadMoreWrap" class="load-more-wrap" style="display:none">
-    <button class="btn ghost small" id="loadMoreBtn">Load previous messages</button>
+  <div id="loadMoreSpinner" class="load-more-spinner" style="display:none">
+    <span class="lm-dot"></span><span class="lm-dot"></span><span class="lm-dot"></span>
   </div>
   <div id="logBody"></div>
 </main>
@@ -205,7 +205,8 @@ export class ChatView implements vscode.WebviewViewProvider {
         private auth: AuthService,
         private modelsService: ModelsService,
         private memory?: MemoryStore,
-        private mcp?: import("../services/mcp/mcpManager").McpManager
+        private mcp?: import("../services/mcp/mcpManager").McpManager,
+        private globalMemory?: import("../services/memory/globalMemoryStore").GlobalMemoryStore
     ) {
         this.chats = new ChatStore(ctx);
         this.activeChat = this.chats.active();
@@ -247,6 +248,14 @@ export class ChatView implements vscode.WebviewViewProvider {
         this.view.webview.postMessage({
             type: "memories",
             memories: this.memory.list(),
+        });
+    }
+
+    private pushGlobalMemories(): void {
+        if (!this.view || !this.globalMemory) return;
+        this.view.webview.postMessage({
+            type: "globalMemories",
+            memories: this.globalMemory.list(),
         });
     }
 
@@ -340,6 +349,11 @@ export class ChatView implements vscode.WebviewViewProvider {
             const subMem = this.memory.onChange(() => this.pushMemories());
             this.subs.push(subMem);
             this.pushMemories();
+        }
+        if (this.globalMemory) {
+            const subGm = this.globalMemory.onChange(() => this.pushGlobalMemories());
+            this.subs.push(subGm);
+            this.pushGlobalMemories();
         }
         if (this.mcp) {
             const subMcp = this.mcp.onChange(() => this.pushMcpServers());
@@ -675,6 +689,36 @@ export class ChatView implements vscode.WebviewViewProvider {
                 }
                 return;
 
+            case "getGlobalMemories":
+                this.pushGlobalMemories();
+                return;
+
+            case "addGlobalMemory":
+                if (this.globalMemory && typeof m.key === "string" && typeof m.value === "string" && m.key.trim()) {
+                    try { await this.globalMemory.set(m.key.trim(), m.value); }
+                    catch (e: any) { Logger.error("[chat] addGlobalMemory", e); }
+                }
+                return;
+
+            case "editGlobalMemoryValue":
+                if (this.globalMemory && typeof m.key === "string" && typeof m.value === "string") {
+                    try { await this.globalMemory.set(m.key, m.value); }
+                    catch (e: any) { Logger.error("[chat] editGlobalMemoryValue", e); }
+                }
+                return;
+
+            case "deleteGlobalMemory":
+                if (this.globalMemory && typeof m.key === "string") {
+                    await this.globalMemory.delete(m.key);
+                }
+                return;
+
+            case "clearGlobalMemories":
+                if (this.globalMemory) {
+                    await this.globalMemory.clear();
+                }
+                return;
+
             case "getMcpServers":
                 this.pushMcpServers();
                 return;
@@ -992,7 +1036,7 @@ export class ChatView implements vscode.WebviewViewProvider {
     - Be concise. Prefer code over prose when code is the answer.
 
     --- System context ---
-    ${systemBriefForLLM()}${rules}${memCtx}`;
+    ${systemBriefForLLM()}${rules}${memCtx}${this.globalMemory?.toContext() ?? ""}`;
 
         const cleanHistory = stripToolMessages(this.history);
         const messages: ChatMessage[] = [
@@ -1001,26 +1045,35 @@ export class ChatView implements vscode.WebviewViewProvider {
             { role: "user", content: userContent },
         ];
 
-        let acc = "";
-        for await (const d of this.client.stream(
-            {
-                model: settings().chatModel,
-                temperature: settings().temperature,
-                messages,
-            },
-            signal
-        )) {
-            if (d.content) {
-                acc += d.content;
-                this.post({ type: "token", text: d.content });
-            }
-        }
+        // Save user message immediately so it survives crashes / cancellations
         this.activeChat!.messages.push({ role: "user", content: text });
-        this.activeChat!.messages.push({ role: "assistant", content: acc });
-        this.post({ type: "done" });
-        this.updateHistoryAfterTurn();
         await this.persistActive();
         this.pushChatList();
+
+        let acc = "";
+        try {
+            for await (const d of this.client.stream(
+                {
+                    model: settings().chatModel,
+                    temperature: settings().temperature,
+                    messages,
+                },
+                signal
+            )) {
+                if (d.content) {
+                    acc += d.content;
+                    this.post({ type: "token", text: d.content });
+                }
+            }
+        } finally {
+            if (acc) {
+                this.activeChat!.messages.push({ role: "assistant", content: acc });
+            }
+            this.post({ type: "done" });
+            this.updateHistoryAfterTurn();
+            await this.persistActive();
+            this.pushChatList();
+        }
         if (this.activeChat && this.activeChat.title === "New chat") {
             void this.generateAutoTitle(text).catch(() => {});
         }
@@ -1039,13 +1092,21 @@ export class ChatView implements vscode.WebviewViewProvider {
             ? goalText + `\n\n[${imageContent.length} image(s) attached — refer to the conversation history to see them]`
             : goalText;
         const rules = await this.readRulesFile();
-        const memCtx = this.memory?.toContext() ?? "";
+        const memCtx = (this.memory?.toContext() ?? "") + (this.globalMemory?.toContext() ?? "");
         const planCtx = planOnly
             ? "\n\n--- PLAN MODE (current turn) ---\nYou are in PLAN mode. You can ONLY read and analyze \u2014 do NOT modify any files, run commands, or make changes. Output a structured plan with numbered steps. Use only read-only tools. Ignore any prior turn that may have been in AGENT mode \u2014 this turn is plan-only."
             : "\n\n--- AGENT MODE (current turn) ---\nYou are in AGENT mode for THIS turn. You CAN modify files, run commands, delegate, and execute changes. Previous turns may have been in PLAN mode (read-only) \u2014 that restriction is OVER. If the user previously asked for a plan, NOW is the time to execute it. Do not refuse to act citing a plan-mode rule \u2014 it no longer applies.";
         const cleanHistory = sanitizeHistoryForApi(this.history);
+        // Persist user message immediately
+        if (this.activeChat) {
+            this.activeChat.messages.push({ role: "user", content: text });
+            await this.persistActive();
+            this.pushChatList();
+        }
         let stepNum = 0;
-        const updated = await runAgent(
+        let updated: ChatMessage[] = [];
+        try {
+            updated = await runAgent(
             this.client,
             this.registry,
             goal,
@@ -1114,12 +1175,15 @@ export class ChatView implements vscode.WebviewViewProvider {
             },
             rules + memCtx + planCtx,
         );
-        this.liveMessages = [];
-        if (this.activeChat) this.activeChat.messages = updated;
-        this.updateHistoryAfterTurn();
-        await this.persistActive();
-        this.pushChatList();
-        // Auto-title via LLM if first message
+        } finally {
+            this.liveMessages = [];
+            if (this.activeChat && updated && updated.length) {
+                this.activeChat.messages = updated;
+            }
+            this.updateHistoryAfterTurn();
+            await this.persistActive();
+            this.pushChatList();
+        }
         if (this.activeChat && this.activeChat.title === "New chat") {
             void this.generateAutoTitle(text).catch(() => {});
         }
@@ -1302,8 +1366,10 @@ export class ChatView implements vscode.WebviewViewProvider {
     }
 
     private findRealIndexByVisible(visibleIndex: number): number {
+        // visibleIndex is the index within the visible window (starting at this.windowStart),
+        // counting only user/assistant messages (tool messages are filtered out by serializeMessages).
         let count = -1;
-        for (let i = 0; i < this.history.length; i++) {
+        for (let i = this.windowStart; i < this.history.length; i++) {
             const r = this.history[i].role;
             if (r === "user" || r === "assistant") {
                 count++;
